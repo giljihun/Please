@@ -1,0 +1,61 @@
+# Please! — 개발 설계 문서 (v0.1)
+
+## 1. 컨셉 요약
+- 실제 팬 문화인 "카메라 렌즈 사인"을 스마트폰으로 재현
+- 네이밍 유래: 르브론 제임스가 "please"라고 말한 어린 팬을 위해 멈춰준 일화
+- 타깃: K-pop 팬, 스포츠 팬, 콘서트 관객, 콘텐츠 크리에이터 (글로벌)
+- 직접 경쟁자 없음
+
+## 2. 화면 인벤토리 (화면 → 필요 기술 → 선택 기술)
+
+| # | 화면 | 필요 기술 | 선택 기술 |
+|---|------|----------|----------|
+| 1 | 온보딩 / 권한 요청 | AVCaptureDevice.requestAccess, PHPhotoLibrary 권한 플로우 | SwiftUI |
+| 2 | 홈 (세션 시작, 모드 선택) | 단순 네비게이션 | SwiftUI |
+| 3 | 사인 세션 화면 ★핵심 | AVCaptureVideoPreviewLayer, touchesMoved + coalesced/predictedTouches 드로잉, VNDetectHumanHandPoseRequest 손 추적, AVAssetWriter 프레임 합성 녹화, 카운트다운 오버레이 | UIKit 코어 + SwiftUI 래퍼(UIViewControllerRepresentable), 펜 도구/완료 버튼 오버레이는 SwiftUI |
+| 4 | 세션 완료 / 미리보기 | AVPlayer 재생, 랜덤 한글 파일명 생성, 저장/재촬영 분기 | SwiftUI + VideoPlayer |
+| 5 | 라이브러리 (보관함) | 그리드 목록, AVAssetImageGenerator 썸네일, 메타데이터 저장 | SwiftUI(LazyVGrid) + SwiftData |
+| 6 | 영상 상세 / 재생 | 재생, 프레임 캡처, 공유 시트, AVMutableVideoComposition 워터마크 합성 | SwiftUI + AVFoundation |
+| 7 | 편집 화면 | AVAssetExportSession 트리밍, 파일명 변경 | SwiftUI + AVFoundation |
+
+### 독립 화면이 아닌 것
+- 카운트다운 → 3번 화면의 오버레이 상태
+- 펜 커스터마이징(종류/색/굵기) → 3번 화면의 툴바/시트
+- 설정 화면 → v0.1 스코프에서 생략 (설정할 항목 아직 없음)
+
+### 화면 플로우
+온보딩(최초 1회) → 홈 → 세션(3) → 미리보기(4) → 라이브러리(5) → 상세(6) → 편집(7)
+
+## 3. 모듈 구조
+
+```
+App (SwiftUI)
+├── 온보딩 / 홈 / 라이브러리 / 상세 / 편집 → 순수 SwiftUI
+└── SigningSessionView (SwiftUI 래퍼)
+     └── UIViewControllerRepresentable
+          └── CaptureViewController (UIKit)
+               ├── AVCaptureVideoPreviewLayer (전면 카메라)
+               ├── DrawingCanvasView (custom UIView)
+               └── Vision 좌표 → 캔버스 브릿지
+```
+
+## 4. 기술 리스크 및 개발 우선순위
+- 공수의 절반 이상이 3번(사인 세션 화면)에 집중됨
+- 최우선 PoC: 카메라 프레임 + 드로잉 레이어 합성 녹화 (AVAssetWriter)
+- 두 번째 난이도: 6번의 워터마크 합성
+- Vision 손 추적 좌표는 스무딩(이동평균/칼만 필터) 필수 — 없으면 선이 떨림
+
+## 5. 미결정 사항 (Claude Code에서 이어서 결정)
+- [ ] SwiftUI ↔ UIKit 경계 통신 방식: Coordinator+델리게이트 vs Combine/AsyncStream vs 공유 ObservableObject
+- [ ] 드로잉 엔진: PencilKit vs UIBezierPath 커스텀 캔버스 (녹화 합성과의 궁합 검증 필요)
+- [ ] 영상 저장 위치: 앱 Documents + SwiftData 메타데이터 vs 사진 앱 직접 저장
+- [ ] 합성 녹화 방식 최종 확정: 프레임 단위 직접 합성(Metal/Core Image) 세부 파이프라인
+
+## 6. 개발 착수 순서 (제안)
+1. Xcode 프로젝트 셋업 (SwiftUI 앱 쉘, 폴더 구조, 권한 plist)
+2. PoC: 전면 카메라 프리뷰 + 터치 드로잉 오버레이
+3. PoC: 프리뷰+드로잉 합성 AVAssetWriter 녹화
+4. 세션 플로우 완성 (카운트다운, 완료, 파일명 생성)
+5. 라이브러리/상세/공유
+6. Vision 제스처 모드
+7. 편집, 워터마크 내보내기
