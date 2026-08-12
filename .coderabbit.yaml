@@ -1,0 +1,18 @@
+# CodeRabbit 설정
+# https://docs.coderabbit.ai/reference/yaml-template
+
+language: "ko-KR"
+
+reviews:
+  # assertive: 사소한 것까지 지적 / chill: 중요한 것 위주
+  profile: "chill"
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    base_branches:
+      - "main"
+      - "develop"
+
+chat:
+  auto_reply: true
