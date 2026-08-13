@@ -6,7 +6,16 @@ language: "ko-KR"
 reviews:
   # assertive: 사소한 것까지 지적 / chill: 중요한 것 위주
   profile: "chill"
+  # 리뷰 본질만 남기기: 한국어 요약 + 이슈 대비 검증 + 라인별 지적
   high_level_summary: true
+  assess_linked_issues: true
+  changed_files_summary: false
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
   poem: false
   auto_review:
     enabled: true
