@@ -45,11 +45,16 @@ App (SwiftUI)
 - 두 번째 난이도: 6번의 워터마크 합성
 - Vision 손 추적 좌표는 스무딩(이동평균/칼만 필터) 필수 — 없으면 선이 떨림
 
-## 5. 미결정 사항 (Claude Code에서 이어서 결정)
-- [ ] SwiftUI ↔ UIKit 경계 통신 방식: Coordinator+델리게이트 vs Combine/AsyncStream vs 공유 ObservableObject
-- [ ] 드로잉 엔진: PencilKit vs UIBezierPath 커스텀 캔버스 (녹화 합성과의 궁합 검증 필요)
-- [ ] 영상 저장 위치: 앱 Documents + SwiftData 메타데이터 vs 사진 앱 직접 저장
-- [ ] 합성 녹화 방식 최종 확정: 프레임 단위 직접 합성(Metal/Core Image) 세부 파이프라인
+## 5. 기술 결정 사항 (2026-08-18 확정, 이슈 #4)
+- [x] **SwiftUI ↔ UIKit 통신: 공유 `@Observable` ViewModel 주입**
+  - 세션 화면은 SwiftUI 오버레이와 UIKit 캡처 코어가 같은 상태(펜 설정, 녹화 상태)를 동시에 봐야 함 → 이벤트 전달(델리게이트)이 아닌 상태 관찰 문제. 단일 진실 공급원 확보
+  - 델리게이트는 캡처 코어 내부 컴포넌트 간 통신에만 사용
+- [x] **드로잉 엔진: UIBezierPath 커스텀 캔버스** (PencilKit 탈락)
+  - PKCanvasView는 터치 이벤트 전용이라 Vision 손 좌표 주입 불가 → 입력을 "점 시퀀스"로 추상화해 터치/제스처 모드 동일 처리
+  - CGPath를 직접 보유하므로 녹화 합성 시 프레임 단위 렌더링 완전 제어
+- [x] **저장 위치: 앱 Documents + SwiftData 메타데이터**
+  - 라이브러리 요구사항(랜덤 한글 이름, 썸네일, 보관함)이 메타데이터를 전제. 사진 앱 저장은 미리보기/상세의 명시적 버튼으로만 (Add-only 권한 유지)
+- [ ] **합성 파이프라인: Core Image(CIContext) 잠정** — PoC(#6)에서 1080p/30fps 실측 후 확정, 프레임 드랍 시 Metal 전환
 
 ## 6. 개발 착수 순서 (제안)
 1. Xcode 프로젝트 셋업 (SwiftUI 앱 쉘, 폴더 구조, 권한 plist)
