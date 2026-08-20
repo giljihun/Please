@@ -156,11 +156,20 @@ nonisolated final class CameraService: @unchecked Sendable {
         // 고정 30fps: AVAssetWriter 프레임 합성 시 타임스탬프가 예측 가능해야
         // 인코딩이 안정적이다. 가변 프레임레이트면 합성 타이밍이 흔들린다 (#6 선행 조건).
         // throw 가능 구간을 addInput보다 앞에 둔다 — 입력 추가 후 실패하면
-        // 세션에 입력이 남아 재시도가 영구 실패(canAddInput == false)로 굳는다
-        try device.lockForConfiguration()
-        device.activeVideoMinFrameDuration = Self.targetFrameDuration
-        device.activeVideoMaxFrameDuration = Self.targetFrameDuration
-        device.unlockForConfiguration()
+        // 세션에 입력이 남아 재시도가 영구 실패(canAddInput == false)로 굳는다.
+        //
+        // 지원 범위 검증: 미지원 프레임 간격 대입은 Swift do/catch로 잡을 수 없는
+        // ObjC 예외로 즉사한다. iOS 26 기기(iPhone 11+)의 기본 포맷은 전부 30fps를
+        // 지원하므로 지금은 이론적 방어지만, #6에서 포맷을 직접 고르면 실효적이 된다
+        let supports30fps = device.activeFormat.videoSupportedFrameRateRanges.contains {
+            ($0.minFrameRate...$0.maxFrameRate).contains(30)
+        }
+        if supports30fps {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.activeVideoMinFrameDuration = Self.targetFrameDuration
+            device.activeVideoMaxFrameDuration = Self.targetFrameDuration
+        }
 
         let input = try AVCaptureDeviceInput(device: device)
         guard session.canAddInput(input) else {
