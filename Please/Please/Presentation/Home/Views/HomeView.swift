@@ -11,14 +11,21 @@ import SwiftUI
 /// v0.1 스코프: 세션 시작 + 모드 선택 (PLANNING.md 화면 #2)
 struct HomeView: View {
     var body: some View {
-        VStack {
-            Image(systemName: "hand.draw")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Please!")
-                .font(.largeTitle.bold())
+        NavigationStack {
+            VStack(spacing: 24) {
+                Image(systemName: "hand.draw")
+                    .imageScale(.large)
+                    .foregroundStyle(.tint)
+                Text("Please!")
+                    .font(.largeTitle.bold())
+
+                NavigationLink("사인 세션 시작") {
+                    SigningSessionView()
+                }
+                .buttonStyle(.glassProminent)
+            }
+            .padding()
         }
-        .padding()
     }
 }
 
