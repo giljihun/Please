@@ -1,0 +1,113 @@
+//
+//  CaptureViewController.swift
+//  Please
+//
+//  Created by 길지훈 on 8/18/26.
+//
+
+import UIKit
+import AVFoundation
+
+/// 사인 세션 화면의 UIKit 코어.
+///
+/// 설계 근거: 이 화면만 SwiftUI가 아닌 UIKit인 이유는
+/// ① AVCaptureVideoPreviewLayer를 직접 다뤄야 하고
+/// ② coalesced/predictedTouches 기반 드로잉은 UIKit 터치 이벤트에서만 가능하기 때문
+/// (PLANNING.md 3장 모듈 구조 참고)
+final class CaptureViewController: UIViewController {
+
+    let canvasView = DrawingCanvasView()
+
+    private let cameraService = CameraService()
+    private var previewLayer: AVCaptureVideoPreviewLayer?
+    private var appearTask: Task<Void, Never>?
+
+    /// 카메라 이벤트를 SwiftUI 쪽(ViewModel)으로 전달하는 브릿지
+    var onCameraEvent: ((CameraEvent) -> Void)?
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = .black
+
+        // 프리뷰 레이어는 세션을 참조만 하므로 메인에서 생성해도 안전 (구성은 sessionQueue에서)
+        let layer = cameraService.makePreviewLayer()
+        layer.videoGravity = .resizeAspectFill  // 화면 꽉 채움 (여백보다 크롭 선택)
+        view.layer.addSublayer(layer)
+        previewLayer = layer
+
+        canvasView.frame = view.bounds
+        canvasView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(canvasView)
+
+        // sessionQueue → 메인 액터 홉: UI 상태 갱신은 메인에서만
+        cameraService.setEventHandler { [weak self] event in
+            Task { @MainActor in
+                self?.onCameraEvent?(event)
+            }
+        }
+
+        // 설정 앱에서 권한을 허용하고 돌아온 경우를 감지 —
+        // viewDidAppear는 포그라운드 복귀만으로는 재호출되지 않는다.
+        // 셀렉터 방식: iOS 9+는 자동 해제라 deinit 정리가 필요 없고,
+        // Swift 6에서 nonisolated deinit이 non-Sendable 토큰을 못 만지는 문제도 회피
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleForegroundReturn),
+            name: UIApplication.willEnterForegroundNotification,
+            object: nil
+        )
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // 최초 진입: 권한 거부 시 이벤트로 보고 (알럿 표시)
+        startCameraFlow(reportDenial: true)
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        appearTask?.cancel()
+        appearTask = nil
+        cameraService.stop()
+    }
+
+    /// 권한 확인 → 세션 시작.
+    ///
+    /// Task를 보관하는 이유: 권한 다이얼로그가 떠 있는 동안 사용자가 화면을
+    /// 벗어나면, VC가 사라진 뒤 완료된 Task가 멈춘 세션을 되살릴 수 있다.
+    /// viewWillDisappear에서 취소해 이 경합을 차단한다.
+    /// 취소 가드는 await 직후 — "화면을 떠났으면 어떤 경로로도 콜백을 쏘지 않는다"는
+    /// 단일 규칙을 모든 분기에 일관 적용하기 위함
+    private func startCameraFlow(reportDenial: Bool) {
+        appearTask?.cancel()
+        appearTask = Task {
+            let granted = await CameraService.requestAccess()
+            guard !Task.isCancelled else { return }
+            guard granted else {
+                if reportDenial {
+                    onCameraEvent?(.failed(.permissionDenied))
+                }
+                return
+            }
+            cameraService.start()
+        }
+    }
+
+    /// 포그라운드 복귀 시 재기동. 화면이 실제로 보일 때만 —
+    /// 여전히 거부 상태면 침묵 (복귀할 때마다 알럿을 다시 띄우면 괴롭힘이 된다)
+    @objc private func handleForegroundReturn() {
+        guard viewIfLoaded?.window != nil else { return }
+        startCameraFlow(reportDenial: false)
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // 프리뷰 레이어는 오토레이아웃 대상이 아니라서 수동으로 프레임 동기화
+        previewLayer?.frame = view.bounds
+    }
+
+    /// 실패 알럿의 "다시 시도" 동선 (SwiftUI → VM retrySignal → 여기)
+    func retryCamera() {
+        cameraService.start()
+    }
+}
