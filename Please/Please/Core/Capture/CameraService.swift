@@ -153,10 +153,19 @@ nonisolated final class CameraService: @unchecked Sendable {
             throw CameraServiceError.deviceUnavailable
         }
 
+        let input = try AVCaptureDeviceInput(device: device)
+        guard session.canAddInput(input) else {
+            throw CameraServiceError.configurationFailed
+        }
+        session.addInput(input)
+
         // 고정 30fps: AVAssetWriter 프레임 합성 시 타임스탬프가 예측 가능해야
         // 인코딩이 안정적이다. 가변 프레임레이트면 합성 타이밍이 흔들린다 (#6 선행 조건).
-        // throw 가능 구간을 addInput보다 앞에 둔다 — 입력 추가 후 실패하면
-        // 세션에 입력이 남아 재시도가 영구 실패(canAddInput == false)로 굳는다.
+        //
+        // 반드시 addInput 이후에 설정 — addInput이 프리셋에 맞춰 activeFormat과
+        // frame duration을 재설정할 수 있어, 먼저 설정하면 조용히 무효화되고
+        // 검사 대상 포맷도 실제 세션 포맷과 달라진다.
+        // 설정 실패 시 추가한 input을 명시적으로 롤백해 재시도 영구 실패를 막는다.
         //
         // 지원 범위 검증: 미지원 프레임 간격 대입은 Swift do/catch로 잡을 수 없는
         // ObjC 예외로 즉사한다. iOS 26 기기(iPhone 11+)의 기본 포맷은 전부 30fps를
@@ -165,17 +174,16 @@ nonisolated final class CameraService: @unchecked Sendable {
             ($0.minFrameRate...$0.maxFrameRate).contains(30)
         }
         if supports30fps {
-            try device.lockForConfiguration()
-            defer { device.unlockForConfiguration() }
-            device.activeVideoMinFrameDuration = Self.targetFrameDuration
-            device.activeVideoMaxFrameDuration = Self.targetFrameDuration
+            do {
+                try device.lockForConfiguration()
+                defer { device.unlockForConfiguration() }
+                device.activeVideoMinFrameDuration = Self.targetFrameDuration
+                device.activeVideoMaxFrameDuration = Self.targetFrameDuration
+            } catch {
+                session.removeInput(input)
+                throw CameraServiceError.configurationFailed
+            }
         }
-
-        let input = try AVCaptureDeviceInput(device: device)
-        guard session.canAddInput(input) else {
-            throw CameraServiceError.configurationFailed
-        }
-        session.addInput(input)
 
         registerSessionObservers()
     }
