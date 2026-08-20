@@ -133,6 +133,7 @@ private extension SigningSessionView {
                     .padding(10)
             }
             .glassEffect()
+            .accessibilityLabel("세션 나가기")
             Spacer()
         }
         .padding(.horizontal, 20)
@@ -168,6 +169,8 @@ private extension SigningSessionView {
                             )
                         }
                 }
+                .accessibilityLabel("\(pen.name) 펜")
+                .accessibilityAddTraits(viewModel.penColor == pen ? [.isSelected] : [])
             }
 
             Divider()
@@ -180,6 +183,7 @@ private extension SigningSessionView {
                     .font(.title3)
                     .foregroundStyle(.white)
             }
+            .accessibilityLabel("전체 지우기")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 12)

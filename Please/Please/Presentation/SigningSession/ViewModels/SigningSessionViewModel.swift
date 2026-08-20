@@ -14,6 +14,17 @@ enum PenColor: CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    /// VoiceOver용 이름 — 색상 버튼이 시각 정보(Circle)뿐이면 구분 불가
+    var name: String {
+        switch self {
+        case .white: "흰색"
+        case .black: "검정"
+        case .red: "빨강"
+        case .yellow: "노랑"
+        case .blue: "파랑"
+        }
+    }
+
     var color: Color {
         switch self {
         case .white: .white
