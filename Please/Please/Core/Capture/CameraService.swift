@@ -154,8 +154,19 @@ nonisolated final class CameraService: @unchecked Sendable {
     /// 전면 카메라 입력 구성. sessionQueue에서만 호출할 것
     private func configure() throws {
         session.beginConfiguration()
-        // defer: 성공/실패 어느 경로로 빠져도 commit이 보장됨 (begin/commit 짝 맞추기)
-        defer { session.commitConfiguration() }
+
+        // 구성 도중 어느 단계에서 실패하든 이미 추가된 입출력을 전부 되돌린다.
+        //
+        // 실패 지점마다 롤백을 손으로 적으면 단계가 늘어날 때마다 누락이 생긴다
+        // (실제로 입력 롤백을 추가한 뒤 출력 롤백을 빠뜨려 같은 버그가 재발했다).
+        // 세션에 남은 입출력은 재시도 시 canAdd~ 실패로 이어져 영구 고장이 된다.
+        // #6에서 오디오 입력·녹화 출력이 추가되어도 이 방식은 그대로 유효하다
+        var isComplete = false
+        defer {
+            if !isComplete { removeAllInputsAndOutputs() }
+            // begin/commit 짝은 성공·실패 어느 경로로도 보장되어야 한다
+            session.commitConfiguration()
+        }
 
         session.sessionPreset = .high
 
@@ -180,7 +191,6 @@ nonisolated final class CameraService: @unchecked Sendable {
         // 프레임이 오지 않아 손 인식만 영구히 죽는다. 원인 추적이 불가능해지는 전형적인 케이스.
         // 실패 시 입력도 되돌려야 재시도가 canAddInput == false로 굳지 않는다
         guard session.canAddOutput(videoOutput) else {
-            session.removeInput(input)
             throw CameraServiceError.configurationFailed
         }
         session.addOutput(videoOutput)
@@ -212,10 +222,17 @@ nonisolated final class CameraService: @unchecked Sendable {
         }
 
         registerSessionObservers()
+        isComplete = true
     }
 
     /// 목표 프레임 간격 (30fps)
     private static let targetFrameDuration = CMTime(value: 1, timescale: 30)
+
+    /// 구성 실패 롤백. beginConfiguration 블록 안에서만 호출할 것
+    private func removeAllInputsAndOutputs() {
+        for output in session.outputs { session.removeOutput(output) }
+        for input in session.inputs { session.removeInput(input) }
+    }
 
     // MARK: - 세션 인터럽션/에러 대응
     // 전화 수신·다른 앱의 카메라 선점·미디어 서비스 리셋 시 세션은 "조용히" 멈춘다.
