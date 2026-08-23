@@ -72,6 +72,22 @@ final class SigningSessionViewModel {
         retrySignal += 1
     }
 
+    // MARK: - 손 인식 검증 (#19 개발용)
+    // 인식 실패 원인을 눈으로 구분하기 위한 지표. 검증이 끝나면 제거하거나
+    // 개발자 설정 뒤로 숨긴다
+
+    var isHandOverlayEnabled = false
+    private(set) var isHandDetected = false
+    private(set) var visionMilliseconds: Double = 0
+
+    func handleHandDetection(detected: Bool, milliseconds: Double) {
+        isHandDetected = detected
+        // 프레임마다 값이 튀면 읽기 어려우므로 이동평균으로 완만하게 (표시용)
+        visionMilliseconds = visionMilliseconds == 0
+            ? milliseconds
+            : visionMilliseconds * 0.8 + milliseconds * 0.2
+    }
+
     // MARK: - 카메라 상태
     // CameraEvent(코어의 사실)를 UI 상태(화면의 표현)로 번역하는 것이 VM의 역할.
     // cameraStatus는 오직 CameraEvent만이 바꾼다 (단일 진실 공급원) —
