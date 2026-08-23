@@ -151,11 +151,11 @@ final class CaptureViewController: UIViewController {
             guard let result = detector.detect(in: sampleBuffer) else { return }
 
             Task { @MainActor in
-                guard let self, isHandOverlayEnabled else { return }
                 // 토글을 끄는 순간 이미 분석 중이던 프레임의 결과가 뒤늦게 도착할 수 있다.
                 // 그대로 반영하면 다시 켤 때 낡은 손 위치가 한 프레임 스쳐 지나간다
-                handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
-                onHandDetection?(result.pose != nil, result.processingMilliseconds)
+                guard let self, self.isHandOverlayEnabled else { return }
+                self.handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
+                self.onHandDetection?(result.pose != nil, result.processingMilliseconds)
             }
         }
     }
