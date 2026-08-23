@@ -17,16 +17,15 @@ import Vision
 /// #19 실측이 끝나면 제거하거나 개발자 설정 뒤로 숨긴다
 final class HandOverlayView: UIView {
 
-    /// Vision 정규화 좌표 → 화면 좌표 변환에 필요.
-    /// 프리뷰 레이어가 videoGravity·미러링·회전을 모두 반영해 변환해주므로
-    /// 직접 삼각함수를 쓰지 않는다 (직접 계산하면 크롭 영역 계산에서 어긋나기 쉽다)
-    weak var previewLayer: AVCaptureVideoPreviewLayer?
-
     private var pose: HandPose?
 
+    /// 감지에 쓰인 정립 이미지 크기 — aspectFill 크롭 계산의 기준
+    private var imageSize: CGSize = .zero
+
     /// 표시할 포즈 갱신. nil이면 오버레이를 비운다
-    func update(pose: HandPose?) {
+    func update(pose: HandPose?, imageSize: CGSize) {
         self.pose = pose
+        self.imageSize = imageSize
         setNeedsDisplay()
     }
 
@@ -103,12 +102,32 @@ final class HandOverlayView: UIView {
 
     // MARK: - 좌표 변환
 
-    /// Vision 정규화 좌표(좌하단 원점) → 화면 좌표.
-    /// AVFoundation 캡처 좌표계는 좌상단 원점이라 y를 뒤집어 넘긴다
+    /// Vision 정규화 좌표(정립 이미지 기준, 좌하단 원점) → 화면 좌표.
+    ///
+    /// 프리뷰 레이어의 `layerPointConverted`를 쓰지 않는 이유: 그 메서드는
+    /// "회전·미러링이 적용되지 않은 원본 버퍼" 좌표를 기대한다. 감지기가 이미
+    /// 정립 방향으로 인식했으므로 그대로 넘기면 보정이 두 번 걸려 스켈레톤이 어긋난다.
+    ///
+    /// 대신 프리뷰와 동일한 aspectFill 규칙(짧은 변을 채우고 넘치는 쪽을 잘라냄)을
+    /// 직접 재현한다 — 프리뷰가 videoGravity = .resizeAspectFill이므로 결과가 일치한다
     private func screenPoint(_ normalized: CGPoint) -> CGPoint? {
-        guard let previewLayer else { return nil }
-        let capturePoint = CGPoint(x: normalized.x, y: 1 - normalized.y)
-        return previewLayer.layerPointConverted(fromCaptureDevicePoint: capturePoint)
+        guard imageSize.width > 0, imageSize.height > 0 else { return nil }
+
+        let scale = max(bounds.width / imageSize.width, bounds.height / imageSize.height)
+        let scaledSize = CGSize(
+            width: imageSize.width * scale,
+            height: imageSize.height * scale
+        )
+        // 크롭으로 잘려나간 만큼을 좌우·상하 대칭으로 보정
+        let offset = CGPoint(
+            x: (bounds.width - scaledSize.width) / 2,
+            y: (bounds.height - scaledSize.height) / 2
+        )
+
+        return CGPoint(
+            x: normalized.x * scaledSize.width + offset.x,
+            y: (1 - normalized.y) * scaledSize.height + offset.y  // Vision은 좌하단 원점
+        )
     }
 
     /// 신뢰도 → 색. 0.5(임계) 부근은 빨강, 1.0에 가까울수록 초록

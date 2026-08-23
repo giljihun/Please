@@ -71,6 +71,9 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
     struct Result: Sendable {
         let pose: HandPose?
         let processingMilliseconds: Double
+        /// 방향 보정 후의 이미지 크기. 오버레이가 화면 좌표로 변환할 때 필요하다
+        /// (세로 모드에서 버퍼는 가로로 누워 있으므로 폭·높이가 뒤바뀐다)
+        let uprightImageSize: CGSize
     }
 
     /// 이 값 미만의 관절은 버린다 — 애매한 좌표로 선을 그리면 획이 엉뚱한 곳으로 튄다
@@ -102,8 +105,18 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
 
         let start = CFAbsoluteTimeGetCurrent()
 
+        // 방향 보정 후 크기 — 90도 회전이므로 폭과 높이가 뒤바뀐다
+        let uprightSize = CGSize(
+            width: CVPixelBufferGetHeight(pixelBuffer),
+            height: CVPixelBufferGetWidth(pixelBuffer)
+        )
+
         // 전면 카메라 세로 모드에서 버퍼는 가로로 누워 있고 좌우가 뒤집혀 있다.
-        // 방향을 잘못 주면 관절은 찾아도 좌표가 90도 돌아가므로 반드시 명시해야 한다
+        //
+        // 이 값은 단순한 좌표 설정이 아니라 "손이 어느 방향인지"를 모델에 알려주는 입력이다.
+        // 누운 이미지를 그대로 넣으면 인식률 자체가 떨어지므로 반드시 정립 방향을 지정한다.
+        // 대신 반환 좌표는 "정립 이미지 기준"이 되므로, 화면 변환은 오버레이가
+        // 프리뷰 레이어가 아닌 이 크기를 기준으로 직접 수행한다 (이중 보정 방지)
         let handler = VNImageRequestHandler(
             cvPixelBuffer: pixelBuffer,
             orientation: .leftMirrored,
@@ -113,15 +126,15 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         do {
             try handler.perform([request])
         } catch {
-            return Result(pose: nil, processingMilliseconds: elapsed(since: start))
+            return Result(pose: nil, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
         }
 
         guard let observation = request.results?.first else {
-            return Result(pose: nil, processingMilliseconds: elapsed(since: start))
+            return Result(pose: nil, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
         }
 
         let pose = makePose(from: observation)
-        return Result(pose: pose, processingMilliseconds: elapsed(since: start))
+        return Result(pose: pose, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
     }
 
     private func makePose(from observation: VNHumanHandPoseObservation) -> HandPose? {

@@ -55,7 +55,6 @@ final class CaptureViewController: UIViewController {
         // 스켈레톤은 캔버스 위에 — 사인 선에 가려지면 진단 도구로서 의미가 없다
         handOverlay.frame = view.bounds
         handOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        handOverlay.previewLayer = layer
         handOverlay.isHidden = true
         view.addSubview(handOverlay)
 
@@ -138,7 +137,7 @@ final class CaptureViewController: UIViewController {
     private func updateFrameHandler() {
         guard isHandOverlayEnabled else {
             cameraService.setFrameHandler(nil)
-            handOverlay.update(pose: nil)
+            handOverlay.update(pose: nil, imageSize: .zero)
             return
         }
 
@@ -152,7 +151,7 @@ final class CaptureViewController: UIViewController {
             guard let result = detector.detect(in: sampleBuffer) else { return }
 
             Task { @MainActor in
-                self?.handOverlay.update(pose: result.pose)
+                self?.handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
                 self?.onHandDetection?(result.pose != nil, result.processingMilliseconds)
             }
         }
