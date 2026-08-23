@@ -10,37 +10,34 @@ import SwiftUI
 /// 사인에 쓸 수 있는 펜 색상 팔레트.
 /// SwiftUI(Color)와 UIKit(UIColor)이 같은 색을 봐야 하므로 양쪽 변환을 함께 제공
 enum PenColor: CaseIterable, Identifiable {
-    case white, black, red, yellow, blue
+    case red, black, white, blue
 
     var id: Self { self }
 
     /// VoiceOver용 이름 — 색상 버튼이 시각 정보(Circle)뿐이면 구분 불가
     var name: String {
         switch self {
-        case .white: "흰색"
-        case .black: "검정"
         case .red: "빨강"
-        case .yellow: "노랑"
+        case .black: "검정"
+        case .white: "흰색"
         case .blue: "파랑"
         }
     }
 
     var color: Color {
         switch self {
-        case .white: .white
-        case .black: .black
         case .red: .red
-        case .yellow: .yellow
+        case .black: .black
+        case .white: .white
         case .blue: .blue
         }
     }
 
     var uiColor: UIColor {
         switch self {
-        case .white: .white
-        case .black: .black
         case .red: .systemRed
-        case .yellow: .systemYellow
+        case .black: .black
+        case .white: .white
         case .blue: .systemBlue
         }
     }
@@ -56,8 +53,9 @@ final class SigningSessionViewModel {
 
     // MARK: - 펜 설정 (SwiftUI 툴바 ↔ UIKit 캔버스 공유)
 
-    var penColor: PenColor = .white
-    var penWidth: CGFloat = 6
+    // 실제 렌즈 사인은 굵은 마커(매직)로 이뤄지므로 기본값을 그에 맞춘다
+    var penColor: PenColor = .red
+    var penWidth: CGFloat = 16
 
     // MARK: - 명령 신호
     // "지우기/재시도"는 상태가 아닌 일회성 명령이라, 값 증가를 신호로 쓰는 카운터 방식 채택.
