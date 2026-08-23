@@ -51,6 +51,12 @@ nonisolated final class CameraService: @unchecked Sendable {
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
 
+    /// 프레임 델리게이트 전용 큐. 세션 큐와 분리하는 이유:
+    /// 프레임 처리(Vision 분석)가 오래 걸려도 세션 제어(시작/중지/복구)가 막히지 않아야 한다
+    private let videoOutputQueue = DispatchQueue(label: "camera.video.output.queue")
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let frameDelegate = FrameDelegate()
+
     /// "카메라가 켜져 있어야 한다"는 의도. start/stop만이 바꾼다.
     /// 자동 복구 경로는 이 의도를 확인해야 함 — 화면을 떠난 뒤 카메라가
     /// 다시 켜지는 것은 배터리 낭비이자 프라이버시 문제(심사 리젝 사유)
@@ -72,6 +78,12 @@ nonisolated final class CameraService: @unchecked Sendable {
     /// 외부 코드가 실수로 session.startRunning() 등을 불러 큐 제약을 깨는 것을 차단
     func makePreviewLayer() -> AVCaptureVideoPreviewLayer {
         AVCaptureVideoPreviewLayer(session: session)
+    }
+
+    /// 카메라 프레임 수신 핸들러 등록 (Vision 분석·녹화 합성의 공통 입구).
+    /// videoOutputQueue에서 호출되므로 수신 측이 무거운 작업을 해도 세션은 멈추지 않는다
+    func setFrameHandler(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) {
+        frameDelegate.setHandler(handler)
     }
 
     /// 카메라 권한 요청. 최초 1회는 시스템 다이얼로그, 이후는 저장된 상태 반환
@@ -142,8 +154,19 @@ nonisolated final class CameraService: @unchecked Sendable {
     /// 전면 카메라 입력 구성. sessionQueue에서만 호출할 것
     private func configure() throws {
         session.beginConfiguration()
-        // defer: 성공/실패 어느 경로로 빠져도 commit이 보장됨 (begin/commit 짝 맞추기)
-        defer { session.commitConfiguration() }
+
+        // 구성 도중 어느 단계에서 실패하든 이미 추가된 입출력을 전부 되돌린다.
+        //
+        // 실패 지점마다 롤백을 손으로 적으면 단계가 늘어날 때마다 누락이 생긴다
+        // (실제로 입력 롤백을 추가한 뒤 출력 롤백을 빠뜨려 같은 버그가 재발했다).
+        // 세션에 남은 입출력은 재시도 시 canAdd~ 실패로 이어져 영구 고장이 된다.
+        // #6에서 오디오 입력·녹화 출력이 추가되어도 이 방식은 그대로 유효하다
+        var isComplete = false
+        defer {
+            if !isComplete { removeAllInputsAndOutputs() }
+            // begin/commit 짝은 성공·실패 어느 경로로도 보장되어야 한다
+            session.commitConfiguration()
+        }
 
         session.sessionPreset = .high
 
@@ -158,6 +181,19 @@ nonisolated final class CameraService: @unchecked Sendable {
             throw CameraServiceError.configurationFailed
         }
         session.addInput(input)
+
+        // 프레임 출력: Vision 분석과 (이후) 녹화 합성이 공유하는 통로.
+        // alwaysDiscardsLateVideoFrames — 처리가 밀리면 오래된 프레임을 버린다.
+        // 실시간 인터랙션에서는 "밀린 과거 프레임"보다 "최신 프레임"이 항상 옳다
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.setSampleBufferDelegate(frameDelegate, queue: videoOutputQueue)
+        // 출력 추가 실패를 침묵시키지 않는다 — 조용히 넘어가면 세션은 .running을 발행하지만
+        // 프레임이 오지 않아 손 인식만 영구히 죽는다. 원인 추적이 불가능해지는 전형적인 케이스.
+        // 실패 시 입력도 되돌려야 재시도가 canAddInput == false로 굳지 않는다
+        guard session.canAddOutput(videoOutput) else {
+            throw CameraServiceError.configurationFailed
+        }
+        session.addOutput(videoOutput)
 
         // 고정 30fps: AVAssetWriter 프레임 합성 시 타임스탬프가 예측 가능해야
         // 인코딩이 안정적이다. 가변 프레임레이트면 합성 타이밍이 흔들린다 (#6 선행 조건).
@@ -186,10 +222,17 @@ nonisolated final class CameraService: @unchecked Sendable {
         }
 
         registerSessionObservers()
+        isComplete = true
     }
 
     /// 목표 프레임 간격 (30fps)
     private static let targetFrameDuration = CMTime(value: 1, timescale: 30)
+
+    /// 구성 실패 롤백. beginConfiguration 블록 안에서만 호출할 것
+    private func removeAllInputsAndOutputs() {
+        for output in session.outputs { session.removeOutput(output) }
+        for input in session.inputs { session.removeInput(input) }
+    }
 
     // MARK: - 세션 인터럽션/에러 대응
     // 전화 수신·다른 앱의 카메라 선점·미디어 서비스 리셋 시 세션은 "조용히" 멈춘다.
@@ -266,5 +309,32 @@ nonisolated final class CameraService: @unchecked Sendable {
             guard isActive else { return }
             startLocked()
         }
+    }
+}
+
+/// 프레임 델리게이트.
+///
+/// 별도 클래스인 이유: AVCaptureVideoDataOutputSampleBufferDelegate는 NSObject를 요구하는데,
+/// CameraService를 NSObject로 만들면 Swift 6 동시성 모델과 충돌한다.
+/// 델리게이트 역할만 떼어내면 CameraService는 순수 Swift 타입으로 남는다.
+nonisolated private final class FrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var handler: (@Sendable (CMSampleBuffer) -> Void)?
+
+    /// 핸들러는 메인 스레드에서 등록되고 videoOutputQueue에서 읽히므로 락으로 보호.
+    /// (CameraService처럼 전용 큐로 몰지 않는 이유: 프레임 경로에 큐 홉을 추가하면
+    ///  프레임마다 불필요한 디스패치 비용이 생긴다)
+    func setHandler(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) {
+        lock.withLock { self.handler = handler }
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        let handler = lock.withLock { self.handler }
+        handler?(sampleBuffer)
     }
 }

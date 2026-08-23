@@ -20,12 +20,16 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
         controller.onCameraEvent = { event in
             viewModel.handleCameraEvent(event)
         }
+        controller.onHandDetection = { detected, milliseconds in
+            viewModel.handleHandDetection(detected: detected, milliseconds: milliseconds)
+        }
         return controller
     }
 
     func updateUIViewController(_ controller: CaptureViewController, context: Context) {
         controller.canvasView.strokeColor = viewModel.penColor.uiColor
         controller.canvasView.strokeWidth = viewModel.penWidth
+        controller.isHandOverlayEnabled = viewModel.isHandOverlayEnabled
 
         // 명령 카운터가 바뀌었을 때만 1회 실행 (일회성 명령 패턴)
         if context.coordinator.lastClearSignal != viewModel.clearSignal {
@@ -67,7 +71,7 @@ struct SigningSessionView: View {
                 .ignoresSafeArea()
 
             VStack {
-                closeButton
+                topBar
                 if viewModel.cameraStatus == .interrupted {
                     interruptedBanner
                 }
@@ -120,9 +124,9 @@ struct SigningSessionView: View {
 
 private extension SigningSessionView {
 
-    /// 세션 나가기 버튼 (내비게이션 바를 숨겼으므로 자체 동선 제공)
-    /// PoC 임시 — 본 구현에서 "완료" 버튼으로 대체 예정 (#9)
-    var closeButton: some View {
+    /// 상단 바 — 나가기 + 손 인식 디버그 토글
+    /// PoC 임시. 본 구현에서 "완료" 버튼으로 대체 예정 (#9), 디버그는 제거 (#19)
+    var topBar: some View {
         HStack {
             Button {
                 dismiss()
@@ -134,10 +138,41 @@ private extension SigningSessionView {
             }
             .glassEffect()
             .accessibilityLabel("세션 나가기")
+
             Spacer()
+
+            if viewModel.isHandOverlayEnabled {
+                visionStats
+            }
+
+            Button {
+                viewModel.isHandOverlayEnabled.toggle()
+            } label: {
+                Image(systemName: viewModel.isHandOverlayEnabled ? "hand.raised.fill" : "hand.raised")
+                    .font(.title3)
+                    .foregroundStyle(viewModel.isHandOverlayEnabled ? .green : .white)
+                    .padding(10)
+            }
+            .glassEffect()
+            .accessibilityLabel("손 인식 표시")
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
+    }
+
+    /// 인식 상태와 처리 시간 — 조명·거리별 성능을 현장에서 바로 읽기 위한 지표
+    var visionStats: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(viewModel.isHandDetected ? .green : .red)
+                .frame(width: 8, height: 8)
+            Text("\(viewModel.visionMilliseconds, specifier: "%.0f")ms")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .glassEffect()
     }
 
     /// 인터럽션 안내 배너 — 사용자 개입이 불필요한 중단이므로 알럿이 아닌 배너로.
