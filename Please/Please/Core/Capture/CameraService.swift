@@ -51,6 +51,12 @@ nonisolated final class CameraService: @unchecked Sendable {
     private let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
 
+    /// 프레임 델리게이트 전용 큐. 세션 큐와 분리하는 이유:
+    /// 프레임 처리(Vision 분석)가 오래 걸려도 세션 제어(시작/중지/복구)가 막히지 않아야 한다
+    private let videoOutputQueue = DispatchQueue(label: "camera.video.output.queue")
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let frameDelegate = FrameDelegate()
+
     /// "카메라가 켜져 있어야 한다"는 의도. start/stop만이 바꾼다.
     /// 자동 복구 경로는 이 의도를 확인해야 함 — 화면을 떠난 뒤 카메라가
     /// 다시 켜지는 것은 배터리 낭비이자 프라이버시 문제(심사 리젝 사유)
@@ -72,6 +78,12 @@ nonisolated final class CameraService: @unchecked Sendable {
     /// 외부 코드가 실수로 session.startRunning() 등을 불러 큐 제약을 깨는 것을 차단
     func makePreviewLayer() -> AVCaptureVideoPreviewLayer {
         AVCaptureVideoPreviewLayer(session: session)
+    }
+
+    /// 카메라 프레임 수신 핸들러 등록 (Vision 분석·녹화 합성의 공통 입구).
+    /// videoOutputQueue에서 호출되므로 수신 측이 무거운 작업을 해도 세션은 멈추지 않는다
+    func setFrameHandler(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) {
+        frameDelegate.setHandler(handler)
     }
 
     /// 카메라 권한 요청. 최초 1회는 시스템 다이얼로그, 이후는 저장된 상태 반환
@@ -158,6 +170,15 @@ nonisolated final class CameraService: @unchecked Sendable {
             throw CameraServiceError.configurationFailed
         }
         session.addInput(input)
+
+        // 프레임 출력: Vision 분석과 (이후) 녹화 합성이 공유하는 통로.
+        // alwaysDiscardsLateVideoFrames — 처리가 밀리면 오래된 프레임을 버린다.
+        // 실시간 인터랙션에서는 "밀린 과거 프레임"보다 "최신 프레임"이 항상 옳다
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.setSampleBufferDelegate(frameDelegate, queue: videoOutputQueue)
+        if session.canAddOutput(videoOutput) {
+            session.addOutput(videoOutput)
+        }
 
         // 고정 30fps: AVAssetWriter 프레임 합성 시 타임스탬프가 예측 가능해야
         // 인코딩이 안정적이다. 가변 프레임레이트면 합성 타이밍이 흔들린다 (#6 선행 조건).
@@ -266,5 +287,32 @@ nonisolated final class CameraService: @unchecked Sendable {
             guard isActive else { return }
             startLocked()
         }
+    }
+}
+
+/// 프레임 델리게이트.
+///
+/// 별도 클래스인 이유: AVCaptureVideoDataOutputSampleBufferDelegate는 NSObject를 요구하는데,
+/// CameraService를 NSObject로 만들면 Swift 6 동시성 모델과 충돌한다.
+/// 델리게이트 역할만 떼어내면 CameraService는 순수 Swift 타입으로 남는다.
+nonisolated private final class FrameDelegate: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate, @unchecked Sendable {
+
+    private let lock = NSLock()
+    private var handler: (@Sendable (CMSampleBuffer) -> Void)?
+
+    /// 핸들러는 메인 스레드에서 등록되고 videoOutputQueue에서 읽히므로 락으로 보호.
+    /// (CameraService처럼 전용 큐로 몰지 않는 이유: 프레임 경로에 큐 홉을 추가하면
+    ///  프레임마다 불필요한 디스패치 비용이 생긴다)
+    func setHandler(_ handler: (@Sendable (CMSampleBuffer) -> Void)?) {
+        lock.withLock { self.handler = handler }
+    }
+
+    func captureOutput(
+        _ output: AVCaptureOutput,
+        didOutput sampleBuffer: CMSampleBuffer,
+        from connection: AVCaptureConnection
+    ) {
+        let handler = lock.withLock { self.handler }
+        handler?(sampleBuffer)
     }
 }
