@@ -176,9 +176,14 @@ nonisolated final class CameraService: @unchecked Sendable {
         // 실시간 인터랙션에서는 "밀린 과거 프레임"보다 "최신 프레임"이 항상 옳다
         videoOutput.alwaysDiscardsLateVideoFrames = true
         videoOutput.setSampleBufferDelegate(frameDelegate, queue: videoOutputQueue)
-        if session.canAddOutput(videoOutput) {
-            session.addOutput(videoOutput)
+        // 출력 추가 실패를 침묵시키지 않는다 — 조용히 넘어가면 세션은 .running을 발행하지만
+        // 프레임이 오지 않아 손 인식만 영구히 죽는다. 원인 추적이 불가능해지는 전형적인 케이스.
+        // 실패 시 입력도 되돌려야 재시도가 canAddInput == false로 굳지 않는다
+        guard session.canAddOutput(videoOutput) else {
+            session.removeInput(input)
+            throw CameraServiceError.configurationFailed
         }
+        session.addOutput(videoOutput)
 
         // 고정 30fps: AVAssetWriter 프레임 합성 시 타임스탬프가 예측 가능해야
         // 인코딩이 안정적이다. 가변 프레임레이트면 합성 타이밍이 흔들린다 (#6 선행 조건).
