@@ -30,11 +30,12 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
         controller.canvasView.strokeColor = viewModel.penColor.uiColor
         controller.canvasView.strokeWidth = viewModel.penWidth
         controller.isHandOverlayEnabled = viewModel.isHandOverlayEnabled
+        controller.isGestureDrawingEnabled = viewModel.isGestureDrawingEnabled
 
         // 명령 카운터가 바뀌었을 때만 1회 실행 (일회성 명령 패턴)
         if context.coordinator.lastClearSignal != viewModel.clearSignal {
             context.coordinator.lastClearSignal = viewModel.clearSignal
-            controller.canvasView.clear()
+            controller.clearCanvas()
         }
         if context.coordinator.lastRetrySignal != viewModel.retrySignal {
             context.coordinator.lastRetrySignal = viewModel.retrySignal
@@ -51,6 +52,29 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
     final class Coordinator {
         var lastClearSignal = 0
         var lastRetrySignal = 0
+    }
+}
+
+/// 인식 상태와 처리 시간 — 조명·거리별 성능을 현장에서 바로 읽기 위한 지표.
+///
+/// 별도 View 구조체로 뺀 이유: @Observable의 변경 추적 단위는 "그 값을 읽은 body"다.
+/// 처리 시간은 매 프레임 갱신되므로 부모 body에서 읽으면 화면 전체가 초당 30번
+/// 재평가된다. 읽는 곳을 이 작은 뷰로 좁히면 갱신 범위도 여기로 한정된다
+private struct VisionStatsView: View {
+    let viewModel: SigningSessionViewModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(viewModel.isHandDetected ? .green : .red)
+                .frame(width: 8, height: 8)
+            Text("\(viewModel.visionMilliseconds, specifier: "%.0f")ms")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.white)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .glassEffect()
     }
 }
 
@@ -141,9 +165,21 @@ private extension SigningSessionView {
 
             Spacer()
 
-            if viewModel.isHandOverlayEnabled {
-                visionStats
+            if viewModel.isHandOverlayEnabled || viewModel.isGestureDrawingEnabled {
+                VisionStatsView(viewModel: viewModel)
             }
+
+            Button {
+                viewModel.isGestureDrawingEnabled.toggle()
+            } label: {
+                Image(systemName: viewModel.isGestureDrawingEnabled
+                      ? "hand.draw.fill" : "hand.draw")
+                    .font(.title3)
+                    .foregroundStyle(viewModel.isGestureDrawingEnabled ? .green : .white)
+                    .padding(10)
+            }
+            .glassEffect()
+            .accessibilityLabel("제스처로 그리기")
 
             Button {
                 viewModel.isHandOverlayEnabled.toggle()
@@ -158,21 +194,6 @@ private extension SigningSessionView {
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
-    }
-
-    /// 인식 상태와 처리 시간 — 조명·거리별 성능을 현장에서 바로 읽기 위한 지표
-    var visionStats: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(viewModel.isHandDetected ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text("\(viewModel.visionMilliseconds, specifier: "%.0f")ms")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .glassEffect()
     }
 
     /// 인터럽션 안내 배너 — 사용자 개입이 불필요한 중단이므로 알럿이 아닌 배너로.

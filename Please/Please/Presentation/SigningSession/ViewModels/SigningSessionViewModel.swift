@@ -53,9 +53,10 @@ final class SigningSessionViewModel {
 
     // MARK: - 펜 설정 (SwiftUI 툴바 ↔ UIKit 캔버스 공유)
 
-    // 실제 렌즈 사인은 굵은 마커(매직)로 이뤄지므로 기본값을 그에 맞춘다
+    // 실제 렌즈 사인은 굵은 마커(매직)로 이뤄지지만, 공중 제스처는 팔 전체로 쓰는
+    // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄다 (2026-08-26 실기기)
     var penColor: PenColor = .red
-    var penWidth: CGFloat = 16
+    var penWidth: CGFloat = 8
 
     // MARK: - 명령 신호
     // "지우기/재시도"는 상태가 아닌 일회성 명령이라, 값 증가를 신호로 쓰는 카운터 방식 채택.
@@ -77,6 +78,11 @@ final class SigningSessionViewModel {
     // 개발자 설정 뒤로 숨긴다
 
     var isHandOverlayEnabled = false
+
+    /// 제스처 드로잉 모드 (#13). 스켈레톤과 독립 토글 —
+    /// 뼈대가 화면을 덮으면 정작 사인 선의 품질을 볼 수 없기 때문
+    var isGestureDrawingEnabled = false
+
     private(set) var isHandDetected = false
     private(set) var visionMilliseconds: Double = 0
 

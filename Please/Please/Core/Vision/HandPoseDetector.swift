@@ -7,6 +7,7 @@
 
 import Vision
 import AVFoundation
+import QuartzCore
 
 /// 감지된 손의 관절 좌표 묶음.
 ///
@@ -33,27 +34,58 @@ nonisolated struct HandPose: Sendable {
         [.wrist, .littleMCP, .littlePIP, .littleDIP, .littleTip]
     ]
 
-    /// 펜 끝으로 삼을 지점 — 엄지 끝과 검지 끝의 중점.
-    /// 단일 손가락 끝보다 흔들림이 적다 (두 점의 평균이므로 오차가 상쇄됨)
+    /// 펜 끝에 요구하는 신뢰도. 그립 판정보다 엄격하다 —
+    /// 펜 끝은 좌표가 곧 선의 위치라 흔들리면 획이 튀지만,
+    /// 그립 판정은 두 거리의 '비율'이라 좌표가 조금 흔들려도 결론이 잘 안 바뀐다.
+    /// 정밀도가 필요한 곳과 아닌 곳에 같은 잣대를 쓸 이유가 없다
+    private static let penTipMinimumConfidence: Float = 0.5
+
+    /// 펜 끝으로 삼을 지점 — 검지 끝.
+    ///
+    /// 엄지·검지의 중점을 쓰지 않는 이유: 획을 끊으려 엄지를 벌리는 순간 중점이
+    /// 함께 밀려나 "떼는 동작 자체가 펜 끝을 움직인다" (획 끝에 꼬리가 붙음).
+    /// 검지만 쓰면 엄지가 어떻게 움직이든 펜 끝은 제자리다 —
+    /// 실제 펜도 검지가 방향을 잡고 엄지는 쥐었다 놨다 하는 역할만 한다
     var penTip: CGPoint? {
-        guard let thumb = joints[.thumbTip], let index = joints[.indexTip] else { return nil }
-        return CGPoint(
-            x: (thumb.location.x + index.location.x) / 2,
-            y: (thumb.location.y + index.location.y) / 2
-        )
+        guard let index = joints[.indexTip],
+              index.confidence >= Self.penTipMinimumConfidence else { return nil }
+        return index.location
     }
 
-    /// 손 크기 기준자 — 손목에서 중지 밑동까지의 거리.
+    /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
     ///
-    /// 그립 판정에 절대 거리를 쓰면 손이 멀어질 때 오작동한다
-    /// (손 전체가 작아지므로 손을 펴도 손끝 간격이 좁게 측정됨).
-    /// 이 기준자로 나눠 비율로 판정하면 거리와 무관해진다 — 원거리 사용의 전제
-    var handScale: CGFloat? {
-        guard let wrist = joints[.wrist], let middle = joints[.middleMCP] else { return nil }
-        return hypot(
-            middle.location.x - wrist.location.x,
-            middle.location.y - wrist.location.y
-        )
+    /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
+    /// 절대 거리 대신 비율을 쓰는 이유는 `gripScale(imageSize:)` 주석 참고
+    func gripRatio(imageSize: CGSize) -> CGFloat? {
+        guard let thumb = joints[.thumbTip],
+              let index = joints[.indexTip],
+              let scale = gripScale(imageSize: imageSize), scale > 0 else { return nil }
+
+        return Self.pixelDistance(thumb.location, index.location, imageSize: imageSize) / scale
+    }
+
+    /// 그립 판정의 기준자 — 검지 밑동에서 검지 끝까지의 거리 (이미지 픽셀 기준).
+    ///
+    /// 절대 거리를 쓰면 손이 멀어질 때 오작동한다 (손 전체가 작아지므로 손을 펴도
+    /// 손끝 간격이 좁게 측정됨). 기준자로 나눠 비율로 판정하면 거리와 무관해진다.
+    ///
+    /// 손목→중지밑동이 아니라 검지를 쓰는 이유 (2026-08-26 실기기 검증):
+    /// 손을 좌우로 옮기면 **손끝은 화면 안인데 손목이 프레임 밖으로 먼저 나간다.**
+    /// 손목을 요구하면 그 순간 판정 전체가 불가능해져 화면 가장자리에서 그리기가 안 됐다.
+    /// 검지 밑동·끝은 엄지 끝과 함께 손끝 영역에 모여 있어 프레임에서 같이 살아남는다
+    func gripScale(imageSize: CGSize) -> CGFloat? {
+        guard let mcp = joints[.indexMCP], let tip = joints[.indexTip] else { return nil }
+        return Self.pixelDistance(mcp.location, tip.location, imageSize: imageSize)
+    }
+
+    /// 정규화 좌표 두 점 사이의 실제 거리 (픽셀).
+    ///
+    /// 정규화 좌표를 그대로 hypot에 넣으면 안 되는 이유: x는 이미지 폭으로,
+    /// y는 높이로 나눈 값이라 축마다 척도가 다르다. 1080×1920이면 x 0.1은 108px,
+    /// y 0.1은 192px이다. 그대로 재면 **같은 길이도 손 방향에 따라 다른 값**이 나와
+    /// 손을 기울이는 것만으로 그립 문턱을 넘나든다. 픽셀로 되돌린 뒤 잰다
+    private static func pixelDistance(_ a: CGPoint, _ b: CGPoint, imageSize: CGSize) -> CGFloat {
+        hypot((a.x - b.x) * imageSize.width, (a.y - b.y) * imageSize.height)
     }
 }
 
@@ -76,8 +108,13 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         let uprightImageSize: CGSize
     }
 
-    /// 이 값 미만의 관절은 버린다 — 애매한 좌표로 선을 그리면 획이 엉뚱한 곳으로 튄다
-    private static let minimumConfidence: Float = 0.5
+    /// 이 값 미만의 관절은 버린다.
+    ///
+    /// 낮게 잡은 이유: 관절을 여기서 버리면 어떤 소비자도 되살릴 수 없다.
+    /// 정밀도가 필요한 쪽(펜 끝)은 자기 기준으로 한 번 더 거르므로,
+    /// 수집 단계는 "쓸 수 있을지도 모르는 것"까지 남겨두는 편이 낫다.
+    /// 0.5로 두면 손이 프레임 가장자리에 갈 때 그립 판정용 관절까지 함께 사라진다
+    private static let minimumConfidence: Float = 0.3
 
     private let request: VNDetectHumanHandPoseRequest = {
         let request = VNDetectHumanHandPoseRequest()
@@ -103,7 +140,7 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
 
-        let start = CFAbsoluteTimeGetCurrent()
+        let start = CACurrentMediaTime()
 
         // 방향 보정 후 크기 — 90도 회전이므로 폭과 높이가 뒤바뀐다
         let uprightSize = CGSize(
@@ -150,7 +187,10 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         return joints.isEmpty ? nil : HandPose(joints: joints)
     }
 
-    private func elapsed(since start: CFAbsoluteTime) -> Double {
-        (CFAbsoluteTimeGetCurrent() - start) * 1000
+    /// 경과 시간(ms). 벽시계가 아니라 단조 증가 시계를 쓰는 이유:
+    /// CFAbsoluteTimeGetCurrent는 NTP 동기화나 시간 변경으로 앞뒤로 튄다.
+    /// 두 시점 사이의 간격을 재는 데는 언제나 단조 시계를 쓴다
+    private func elapsed(since start: CFTimeInterval) -> Double {
+        (CACurrentMediaTime() - start) * 1000
     }
 }
