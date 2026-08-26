@@ -48,7 +48,6 @@ final class GestureDrawingController {
 
         guard let pose,
               let tip = pose.penTip,
-              let ratio = pose.gripRatio,
               let point = mapper.screenPoint(tip)
         else {
             // 손을 놓쳤다 = 획 종료. 다시 잡히면 새 획으로 시작한다.
@@ -58,34 +57,46 @@ final class GestureDrawingController {
             return
         }
 
-        let smoothed = smooth(point)
+        let ratio = pose.gripRatio(imageSize: imageSize)
 
         if isDrawing {
-            if ratio >= Self.gripExitRatio {
-                isDrawing = false
-                canvas.endStroke()
+            // ratio가 nil = 엄지를 못 찾았다. 이때 획을 끊지 않는 이유:
+            // 엄지·검지를 붙이는 동작 자체가 엄지를 검지 뒤로 숨긴다.
+            // 안 보인다고 끊으면 정작 쥐고 있을 때 사인이 조각난다.
+            // 대신 "시작"할 때는 비율이 확인돼야 한다 (아래 분기) — 못 보고 긋기 시작하진 않는다
+            if let ratio, ratio >= Self.gripExitRatio {
+                endStroke()
             } else {
-                canvas.appendPoint(smoothed)
+                canvas.appendPoint(smooth(point))
             }
-        } else if ratio <= Self.gripEnterRatio {
+        } else if let ratio, ratio <= Self.gripEnterRatio {
             isDrawing = true
-            canvas.beginStroke(at: smoothed)
+            // 새 획은 현재 위치에서 시작한다 — 직전 획의 스무딩 이력을 물려받으면
+            // 획이 엉뚱한 곳에서 끌려오며 시작된다
+            smoothedPoint = point
+            canvas.beginStroke(at: point)
         }
     }
 
     /// 진행 중인 획을 정리하고 스무딩 이력을 버린다 (모드 종료·손 유실)
     func reset() {
         if isDrawing {
-            isDrawing = false
-            canvas.endStroke()
+            endStroke()
         }
         smoothedPoint = nil
+    }
+
+    private func endStroke() {
+        isDrawing = false
+        smoothedPoint = nil  // 획 사이에 이력을 남기지 않는다
+        canvas.endStroke()
     }
 
     // MARK: - 스무딩
 
     /// 지수 이동평균(EMA). Vision 좌표는 프레임마다 몇 픽셀씩 튀는데
-    /// 그대로 그리면 선이 지렁이처럼 떨린다. 직전 좌표와 섞어 흔들림을 눌러준다
+    /// 그대로 그리면 선이 지렁이처럼 떨린다. 직전 좌표와 섞어 흔들림을 눌러준다.
+    /// 획이 진행 중일 때만 호출된다 — 쉬는 동안의 좌표가 섞이면 다음 획이 끌려온다
     private func smooth(_ point: CGPoint) -> CGPoint {
         guard let previous = smoothedPoint else {
             // 첫 좌표는 섞을 대상이 없다 — 그대로 채택 (엉뚱한 곳에서 끌려오는 지연 방지)
