@@ -42,7 +42,7 @@ final class GestureDrawingController {
     /// 호출되지 않는다. HandPoseDetector가 분석 중이면 백프레셔로 프레임을 버리고,
     /// 버려진 프레임은 여기까지 오지도 않는다. 즉 호출 간격은 Vision 처리 속도에
     /// 종속된 가변값이라, 횟수로 세면 발열·저사양에서 상수의 실제 의미가 조용히 달라진다
-    private static let maxMissedInterval: CFAbsoluteTime = 0.13
+    private static let maxMissedInterval: CFTimeInterval = 0.13
 
     // MARK: - 상태
 
@@ -50,8 +50,13 @@ final class GestureDrawingController {
     private var isDrawing = false
     private var smoothedPoint: CGPoint?
 
-    /// 펜 끝을 마지막으로 얻은 시각
-    private var lastSeenAt: CFAbsoluteTime?
+    /// 펜 끝을 마지막으로 얻은 시각.
+    ///
+    /// 벽시계(CFAbsoluteTimeGetCurrent)가 아니라 단조 증가 시계를 쓰는 이유:
+    /// 벽시계는 NTP 동기화나 사용자의 시간 변경으로 앞뒤로 튈 수 있다.
+    /// 사인 도중 시계가 앞으로 뛰면 멀쩡한 획이 유실로 판정돼 끊긴다 —
+    /// "두 시점 사이의 간격"을 재는 데는 언제나 단조 시계를 쓴다
+    private var lastSeenAt: CFTimeInterval?
 
     init(canvas: DrawingCanvasView) {
         self.canvas = canvas
@@ -76,7 +81,7 @@ final class GestureDrawingController {
         // (Vision이 한 프레임을 오래 붙들거나, 카메라가 인터럽션으로 멈추는 경우)
         // 그 구간을 지나 다시 손이 잡히면 handleMissedFrame()을 거치지 않고
         // 곧장 여기로 들어와, 공백 양끝을 잇는 직선이 획에 추가된다
-        let now = CFAbsoluteTimeGetCurrent()
+        let now = CACurrentMediaTime()
         if isDrawing, let lastSeenAt, now - lastSeenAt > Self.maxMissedInterval {
             reset()  // 이어붙이지 않고 끊는다 — 아래에서 새 획으로 다시 판정된다
         }
@@ -122,7 +127,7 @@ final class GestureDrawingController {
             reset()
             return
         }
-        if CFAbsoluteTimeGetCurrent() - lastSeenAt > Self.maxMissedInterval {
+        if CACurrentMediaTime() - lastSeenAt > Self.maxMissedInterval {
             reset()
         }
     }
