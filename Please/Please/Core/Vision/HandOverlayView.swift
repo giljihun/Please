@@ -104,7 +104,7 @@ final class HandOverlayView: UIView {
             width: radius * 2, height: radius * 2
         ))
 
-        guard let ratio = pose.gripRatio else { return }
+        guard let ratio = pose.gripRatio(imageSize: imageSize) else { return }
         let text = String(format: "%.2f", ratio) as NSString
         let attributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),

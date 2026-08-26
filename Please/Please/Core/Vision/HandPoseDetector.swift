@@ -46,30 +46,33 @@ nonisolated struct HandPose: Sendable {
     /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
     ///
     /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
-    /// 절대 거리 대신 비율을 쓰는 이유는 [handScale] 주석 참고
-    var gripRatio: CGFloat? {
+    /// 절대 거리 대신 비율을 쓰는 이유는 `handScale(imageSize:)` 주석 참고
+    func gripRatio(imageSize: CGSize) -> CGFloat? {
         guard let thumb = joints[.thumbTip],
               let index = joints[.indexTip],
-              let scale = handScale, scale > 0 else { return nil }
+              let scale = handScale(imageSize: imageSize), scale > 0 else { return nil }
 
-        let distance = hypot(
-            thumb.location.x - index.location.x,
-            thumb.location.y - index.location.y
-        )
-        return distance / scale
+        return Self.pixelDistance(thumb.location, index.location, imageSize: imageSize) / scale
     }
 
-    /// 손 크기 기준자 — 손목에서 중지 밑동까지의 거리.
+    /// 손 크기 기준자 — 손목에서 중지 밑동까지의 거리 (이미지 픽셀 기준).
     ///
     /// 그립 판정에 절대 거리를 쓰면 손이 멀어질 때 오작동한다
     /// (손 전체가 작아지므로 손을 펴도 손끝 간격이 좁게 측정됨).
     /// 이 기준자로 나눠 비율로 판정하면 거리와 무관해진다 — 원거리 사용의 전제
-    var handScale: CGFloat? {
+    func handScale(imageSize: CGSize) -> CGFloat? {
         guard let wrist = joints[.wrist], let middle = joints[.middleMCP] else { return nil }
-        return hypot(
-            middle.location.x - wrist.location.x,
-            middle.location.y - wrist.location.y
-        )
+        return Self.pixelDistance(wrist.location, middle.location, imageSize: imageSize)
+    }
+
+    /// 정규화 좌표 두 점 사이의 실제 거리 (픽셀).
+    ///
+    /// 정규화 좌표를 그대로 hypot에 넣으면 안 되는 이유: x는 이미지 폭으로,
+    /// y는 높이로 나눈 값이라 축마다 척도가 다르다. 1080×1920이면 x 0.1은 108px,
+    /// y 0.1은 192px이다. 그대로 재면 **같은 길이도 손 방향에 따라 다른 값**이 나와
+    /// 손을 기울이는 것만으로 그립 문턱을 넘나든다. 픽셀로 되돌린 뒤 잰다
+    private static func pixelDistance(_ a: CGPoint, _ b: CGPoint, imageSize: CGSize) -> CGFloat {
+        hypot((a.x - b.x) * imageSize.width, (a.y - b.y) * imageSize.height)
     }
 }
 
