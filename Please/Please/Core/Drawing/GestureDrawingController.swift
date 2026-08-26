@@ -22,7 +22,10 @@ final class GestureDrawingController {
     // 선이 끊겼다 이어졌다를 반복한다. 들어가는 문턱과 나오는 문턱을 벌려두면
     // 경계에서 흔들려도 상태가 뒤집히지 않는다 (에어컨이 24도에 켜고 26도에 끄는 것과 같은 원리)
 
-    /// 엄지·검지가 이만큼 붙으면 펜을 쥔 것으로 본다
+    // ⚠️ 기준자가 손목→중지밑동에서 검지 길이로 바뀌어(gripScale) 아래 두 값은
+    //    아직 실측 전이다. 오버레이의 비율 숫자를 보고 다시 잡아야 한다
+
+    /// 엄지·검지가 이만큼 붙으면 펜을 쥔 것으로 본다 (검지 길이 대비)
     private static let gripEnterRatio: CGFloat = 0.30
     /// 이만큼 벌어져야 뗀 것으로 본다
     private static let gripExitRatio: CGFloat = 0.45
@@ -44,6 +47,14 @@ final class GestureDrawingController {
     /// 종속된 가변값이라, 횟수로 세면 발열·저사양에서 상수의 실제 의미가 조용히 달라진다
     private static let maxMissedInterval: CFTimeInterval = 0.13
 
+    /// 그립 판정이 불가능한 상태(관절 누락)를 참아줄 시간 (초).
+    ///
+    /// 엄지·검지를 붙이는 동작 자체가 엄지를 검지 뒤로 숨기므로, 판정 불가를
+    /// 곧바로 "뗐다"로 읽으면 쥐고 있는데 사인이 조각난다.
+    /// 그렇다고 무제한 참으면 **실제로 뗐는데도 계속 그려진다** —
+    /// 2026-08-26 실기기 테스트에서 나온 문제다. 상한을 둬서 양쪽을 모두 막는다
+    private static let maxGripUnknownInterval: CFTimeInterval = 0.25
+
     // MARK: - 상태
 
     private let canvas: DrawingCanvasView
@@ -57,6 +68,9 @@ final class GestureDrawingController {
     /// 사인 도중 시계가 앞으로 뛰면 멀쩡한 획이 유실로 판정돼 끊긴다 —
     /// "두 시점 사이의 간격"을 재는 데는 언제나 단조 시계를 쓴다
     private var lastSeenAt: CFTimeInterval?
+
+    /// 그립 비율을 마지막으로 계산할 수 있었던 시각
+    private var lastRatioAt: CFTimeInterval?
 
     init(canvas: DrawingCanvasView) {
         self.canvas = canvas
@@ -88,18 +102,25 @@ final class GestureDrawingController {
         lastSeenAt = now
 
         let ratio = pose.gripRatio(imageSize: imageSize)
+        if ratio != nil { lastRatioAt = now }
 
         if isDrawing {
-            // ratio가 nil = 엄지를 못 찾았다. 이때 획을 끊지 않는 이유:
-            // 엄지·검지를 붙이는 동작 자체가 엄지를 검지 뒤로 숨긴다.
-            // 안 보인다고 끊으면 정작 쥐고 있을 때 사인이 조각난다.
-            // 대신 "시작"할 때는 비율이 확인돼야 한다 (아래 분기) — 못 보고 긋기 시작하진 않는다
-            if let ratio, ratio >= Self.gripExitRatio {
+            if let ratio {
+                if ratio >= Self.gripExitRatio {
+                    endStroke()
+                } else {
+                    canvas.appendPoint(smooth(point))
+                }
+            } else if let lastRatioAt, now - lastRatioAt > Self.maxGripUnknownInterval {
+                // 판정 불가가 너무 오래 이어졌다 — 뗐는데 못 읽고 있을 가능성이 크다.
+                // 계속 그리면 손을 뗀 뒤의 궤적까지 사인에 들어간다
                 endStroke()
             } else {
+                // 잠깐의 판정 불가는 참는다 — 이유는 [maxGripUnknownInterval] 주석 참고
                 canvas.appendPoint(smooth(point))
             }
         } else if let ratio, ratio <= Self.gripEnterRatio {
+            // 시작할 때는 비율이 확인돼야 한다 — 못 보고 긋기 시작하지 않는다
             isDrawing = true
             // 새 획은 현재 위치에서 시작한다 — 직전 획의 스무딩 이력을 물려받으면
             // 획이 엉뚱한 곳에서 끌려오며 시작된다
@@ -115,6 +136,7 @@ final class GestureDrawingController {
         }
         smoothedPoint = nil
         lastSeenAt = nil
+        lastRatioAt = nil
     }
 
     /// 펜 끝을 얻지 못한 프레임 처리.
