@@ -37,6 +37,9 @@ App (SwiftUI)
           └── CaptureViewController (UIKit)
                ├── AVCaptureVideoPreviewLayer (전면 카메라)
                ├── DrawingCanvasView (custom UIView)
+               ├── HandPoseDetector (Vision, latest-only 결과 전달)
+               ├── GestureDrawingController (pinch 상태 머신)
+               ├── GesturePenFeedbackView (결과물에서 제외되는 입력 피드백)
                └── Vision 좌표 → 캔버스 브릿지
 ```
 
@@ -45,6 +48,8 @@ App (SwiftUI)
 - 최우선 PoC: 카메라 프레임 + 드로잉 레이어 합성 녹화 (AVAssetWriter)
 - 두 번째 난이도: 6번의 워터마크 합성
 - Vision 손 추적 좌표는 스무딩(이동평균/칼만 필터) 필수 — 없으면 선이 떨림
+- iOS 전면 카메라 Vision에는 visionOS의 시스템 공간 `DragGesture`가 없으므로,
+  pinch 시작·유지·해제·추적 불가를 앱 상태 머신이 직접 보장해야 함
 
 ## 5. 기술 결정 사항 (2026-08-18 확정, 이슈 #4)
 - [x] **SwiftUI ↔ UIKit 통신: 공유 `@Observable` ViewModel 주입**
@@ -55,12 +60,20 @@ App (SwiftUI)
   - CGPath를 직접 보유하므로 녹화 합성 시 프레임 단위 렌더링 완전 제어
 - [x] **저장 위치: 앱 Documents + SwiftData 메타데이터**
   - 라이브러리 요구사항(랜덤 한글 이름, 썸네일, 보관함)이 메타데이터를 전제. 사진 앱 저장은 미리보기/상세의 명시적 버튼으로만 (Add-only 권한 유지)
+- [x] **제스처 입력: Apple 공간 드로잉과 같은 pinch 생명주기** (2026-08-26 확정, 이슈 #23)
+  - 검지 끝은 펜 위치, pinch는 `pen-down`, release는 즉시 `pen-up`으로 처리
+  - 상태를 `hidden / hover / drawing / uncertain`으로 분리하고, 펜 본체는 `drawing` 중에만 표시
+  - pinch 판정이 불가능한 좌표는 최대 100ms/6개만 보류. pinch가 재확인되면 확정하고 release·timeout이면 폐기
+  - clear·모드 전환·카메라 중단·긴 추적 유실 뒤에는 open 상태를 한 번 확인해야 다음 획을 시작
+  - 캡처 PTS를 상태 머신의 시간축으로 쓰고, 메인 액터 대기열에는 최신 Vision 결과 하나만 유지
+  - Apple 샘플은 시스템 `DragGesture`가 획 생명주기를, ARKit 손 앵커가 3D 위치를 제공한다. 이 앱은 전면 카메라 Vision만 쓰므로 같은 사용자 모델을 명시적 상태 머신으로 재현
+  - 참고: [Apple — Creating a painting space in visionOS](https://developer.apple.com/documentation/visionos/creating-a-painting-space-in-visionos)
 - [ ] **합성 파이프라인: Core Image(CIContext) 잠정** — PoC(#6)에서 1080p/30fps 실측 후 확정, 프레임 드랍 시 Metal 전환
 
 ## 6. 개발 착수 순서 (제안)
 1. ~~Xcode 프로젝트 셋업~~ ✅
 2. ~~PoC: 전면 카메라 프리뷰 + 터치 드로잉 오버레이~~ ✅ (터치는 폴백 입력으로 유지)
-3. **PoC: Vision 제스처 입력** ← 순서 변경. 기본 입력이 확정돼야 녹화 대상 구도가 정해진다
+3. **PoC: Vision 제스처 입력** ← Apple-like 상태 머신 구현, 실기기 수치 검증 남음
 4. PoC: 프리뷰+드로잉 합성 AVAssetWriter 녹화
 5. 세션 플로우 완성 (카운트다운, 완료, 파일명 생성)
 6. 라이브러리/상세/공유
