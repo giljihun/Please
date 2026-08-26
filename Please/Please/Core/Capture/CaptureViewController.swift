@@ -55,6 +55,12 @@ final class CaptureViewController: UIViewController {
     var isGestureDrawingEnabled = false {
         didSet {
             guard isGestureDrawingEnabled != oldValue else { return }
+            // 켜지는 순간 진행 중이던 터치 획을 먼저 확정한다.
+            // isUserInteractionEnabled = false는 "새 터치를 받지 않는다"는 뜻일 뿐,
+            // 히트테스트는 터치가 시작될 때 한 번만 하므로 이미 배정된 터치는 계속 도착한다
+            if isGestureDrawingEnabled {
+                canvasView.endStroke()
+            }
             // 제스처 모드에서 터치를 막는 이유: 화면을 스치기만 해도 사인에 선이 섞인다.
             // 제품 규칙상 터치는 제스처가 안 될 때의 폴백이지 동시 입력이 아니다
             canvasView.isUserInteractionEnabled = !isGestureDrawingEnabled
@@ -126,8 +132,10 @@ final class CaptureViewController: UIViewController {
         appearTask?.cancel()
         appearTask = nil
         cameraService.stop()
-        // 세대를 먼저 올리는 이유: stop()은 이미 분석에 들어간 프레임까지 취소하지 못한다.
-        // 순서를 바꾸면 reset() 뒤에 도착한 결과가 검사를 통과해 새 획을 열어버린다
+        // stop()은 이미 분석에 들어간 프레임까지 취소하지 못하므로, 세대를 올려
+        // 화면 이탈 전에 시작된 결과를 전부 무효화한다.
+        // 이 함수는 await 없는 동기 코드라 실행 중에 다른 Task가 끼어들 수 없다 —
+        // 따라서 중요한 것은 "이 줄이 여기 있다"는 사실이지 reset()과의 순서가 아니다
         visionGeneration += 1
         // 프레임이 끊기면 그리던 획이 공중에 뜬 채 남는다 — 여기서 닫아준다
         gestureDrawing.reset()
