@@ -34,6 +34,12 @@ nonisolated struct HandPose: Sendable {
         [.wrist, .littleMCP, .littlePIP, .littleDIP, .littleTip]
     ]
 
+    /// 펜 끝에 요구하는 신뢰도. 그립 판정보다 엄격하다 —
+    /// 펜 끝은 좌표가 곧 선의 위치라 흔들리면 획이 튀지만,
+    /// 그립 판정은 두 거리의 '비율'이라 좌표가 조금 흔들려도 결론이 잘 안 바뀐다.
+    /// 정밀도가 필요한 곳과 아닌 곳에 같은 잣대를 쓸 이유가 없다
+    private static let penTipMinimumConfidence: Float = 0.5
+
     /// 펜 끝으로 삼을 지점 — 검지 끝.
     ///
     /// 엄지·검지의 중점을 쓰지 않는 이유: 획을 끊으려 엄지를 벌리는 순간 중점이
@@ -41,29 +47,35 @@ nonisolated struct HandPose: Sendable {
     /// 검지만 쓰면 엄지가 어떻게 움직이든 펜 끝은 제자리다 —
     /// 실제 펜도 검지가 방향을 잡고 엄지는 쥐었다 놨다 하는 역할만 한다
     var penTip: CGPoint? {
-        joints[.indexTip]?.location
+        guard let index = joints[.indexTip],
+              index.confidence >= Self.penTipMinimumConfidence else { return nil }
+        return index.location
     }
 
     /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
     ///
     /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
-    /// 절대 거리 대신 비율을 쓰는 이유는 `handScale(imageSize:)` 주석 참고
+    /// 절대 거리 대신 비율을 쓰는 이유는 `gripScale(imageSize:)` 주석 참고
     func gripRatio(imageSize: CGSize) -> CGFloat? {
         guard let thumb = joints[.thumbTip],
               let index = joints[.indexTip],
-              let scale = handScale(imageSize: imageSize), scale > 0 else { return nil }
+              let scale = gripScale(imageSize: imageSize), scale > 0 else { return nil }
 
         return Self.pixelDistance(thumb.location, index.location, imageSize: imageSize) / scale
     }
 
-    /// 손 크기 기준자 — 손목에서 중지 밑동까지의 거리 (이미지 픽셀 기준).
+    /// 그립 판정의 기준자 — 검지 밑동에서 검지 끝까지의 거리 (이미지 픽셀 기준).
     ///
-    /// 그립 판정에 절대 거리를 쓰면 손이 멀어질 때 오작동한다
-    /// (손 전체가 작아지므로 손을 펴도 손끝 간격이 좁게 측정됨).
-    /// 이 기준자로 나눠 비율로 판정하면 거리와 무관해진다 — 원거리 사용의 전제
-    func handScale(imageSize: CGSize) -> CGFloat? {
-        guard let wrist = joints[.wrist], let middle = joints[.middleMCP] else { return nil }
-        return Self.pixelDistance(wrist.location, middle.location, imageSize: imageSize)
+    /// 절대 거리를 쓰면 손이 멀어질 때 오작동한다 (손 전체가 작아지므로 손을 펴도
+    /// 손끝 간격이 좁게 측정됨). 기준자로 나눠 비율로 판정하면 거리와 무관해진다.
+    ///
+    /// 손목→중지밑동이 아니라 검지를 쓰는 이유 (2026-08-26 실기기 검증):
+    /// 손을 좌우로 옮기면 **손끝은 화면 안인데 손목이 프레임 밖으로 먼저 나간다.**
+    /// 손목을 요구하면 그 순간 판정 전체가 불가능해져 화면 가장자리에서 그리기가 안 됐다.
+    /// 검지 밑동·끝은 엄지 끝과 함께 손끝 영역에 모여 있어 프레임에서 같이 살아남는다
+    func gripScale(imageSize: CGSize) -> CGFloat? {
+        guard let mcp = joints[.indexMCP], let tip = joints[.indexTip] else { return nil }
+        return Self.pixelDistance(mcp.location, tip.location, imageSize: imageSize)
     }
 
     /// 정규화 좌표 두 점 사이의 실제 거리 (픽셀).
@@ -96,8 +108,13 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         let uprightImageSize: CGSize
     }
 
-    /// 이 값 미만의 관절은 버린다 — 애매한 좌표로 선을 그리면 획이 엉뚱한 곳으로 튄다
-    private static let minimumConfidence: Float = 0.5
+    /// 이 값 미만의 관절은 버린다.
+    ///
+    /// 낮게 잡은 이유: 관절을 여기서 버리면 어떤 소비자도 되살릴 수 없다.
+    /// 정밀도가 필요한 쪽(펜 끝)은 자기 기준으로 한 번 더 거르므로,
+    /// 수집 단계는 "쓸 수 있을지도 모르는 것"까지 남겨두는 편이 낫다.
+    /// 0.5로 두면 손이 프레임 가장자리에 갈 때 그립 판정용 관절까지 함께 사라진다
+    private static let minimumConfidence: Float = 0.3
 
     private let request: VNDetectHumanHandPoseRequest = {
         let request = VNDetectHumanHandPoseRequest()

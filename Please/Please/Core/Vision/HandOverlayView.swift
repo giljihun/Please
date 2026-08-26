@@ -121,9 +121,9 @@ final class HandOverlayView: UIView {
             .screenPoint(normalized)
     }
 
-    /// 신뢰도 → 색. 0.5(임계) 부근은 빨강, 1.0에 가까울수록 초록
+    /// 신뢰도 → 색. 수집 임계(0.3) 부근은 빨강, 1.0에 가까울수록 초록
     private func confidenceColor(_ confidence: Float) -> UIColor {
-        let normalized = max(0, min(1, (confidence - 0.5) * 2))  // 0.5~1.0 → 0~1
+        let normalized = max(0, min(1, (confidence - 0.3) / 0.7))  // 0.3~1.0 → 0~1
         return UIColor(
             hue: CGFloat(normalized) * 0.33,  // 0(빨강) → 0.33(초록)
             saturation: 0.9, brightness: 0.95, alpha: 1
