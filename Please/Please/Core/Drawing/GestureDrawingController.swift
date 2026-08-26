@@ -31,12 +31,56 @@ final class GestureDrawingController {
         case uncertain
     }
 
+    /// 추적이 끊긴 이유.
+    ///
+    /// 하나로 뭉뚱그리면 대응을 고를 수 없다. "펜이 사라졌다"는 같은 현상이라도
+    /// 모델이 손을 못 찾은 것과 우리 상태 머신이 끊은 것은 고칠 곳이 완전히 다르다.
+    /// 실기기에서 어느 사유가 지배적인지 세어 보고 그다음을 정한다 (#26)
+    enum TrackingLoss: String, CaseIterable, Sendable {
+        /// Vision이 손 자체를 찾지 못함 — 카메라·조명·모션 블러 쪽
+        case handNotFound
+        /// 손은 찾았으나 검지 관절이 아예 없음 — 역시 카메라 쪽
+        case penTipMissing
+        /// 검지는 있으나 신뢰도가 기준 미달 — 임계값 조정으로 회수 가능
+        case penTipLowConfidence
+        /// 정규화 좌표를 화면 좌표로 옮기지 못함 — 레이아웃/버퍼 크기 문제
+        case mappingFailed
+        /// 그립 판정에 필요한 관절이 없음 — 잉크는 유지되나 판정이 보류된다
+        case gripUnavailable
+        /// 유실 허용 시간을 넘겨 획을 끊음
+        case missTimeout
+        /// 보류 좌표를 확정하지 못한 채 시간이 지나 획을 끊음
+        case pendingTimeout
+        /// 캡처 타임스탬프가 비정상(역행·무효)이라 생명주기를 재시작함
+        case timestampInvalid
+
+        /// 디버그 표시용 짧은 한글 이름
+        var shortLabel: String {
+            switch self {
+            case .handNotFound: "손없음"
+            case .penTipMissing: "검지없음"
+            case .penTipLowConfidence: "검지약함"
+            case .mappingFailed: "변환실패"
+            case .gripUnavailable: "그립불가"
+            case .missTimeout: "유실초과"
+            case .pendingTimeout: "보류초과"
+            case .timestampInvalid: "시각이상"
+            }
+        }
+    }
+
     /// 화면의 펜 커서·사운드 같은 피드백에 필요한 최신 값.
     struct Feedback: Equatable {
         let state: State
         let point: CGPoint?
         let gripRatio: CGFloat?
         let isWaitingForRelease: Bool
+        /// 가장 최근에 기록된 유실 사유 (#26 계측용)
+        var lastLoss: TrackingLoss?
+        /// 사유별 누적 횟수 (#26 계측용)
+        var lossCounts: [TrackingLoss: Int] = [:]
+        /// 검지 끝 신뢰도. 관절이 없으면 nil — 임계값을 낮추면 회수되는지 판단용
+        var penTipConfidence: Float?
     }
 
     private struct PendingSample {
@@ -73,6 +117,11 @@ final class GestureDrawingController {
 
     private(set) var state: State = .hidden
 
+    /// 유실 사유별 누적 횟수 (#26). 검증이 끝나면 제거한다
+    private(set) var lossCounts: [TrackingLoss: Int] = [:]
+    private(set) var lastLoss: TrackingLoss?
+    private var lastPenTipConfidence: Float?
+
     /// 상태뿐 아니라 좌표도 매 프레임 전달한다. 펜 커서가 hover 중에도 손을 따라야 하기 때문이다.
     var onFeedback: ((Feedback) -> Void)?
 
@@ -100,11 +149,13 @@ final class GestureDrawingController {
         // 캡처 PTS가 유효하지 않거나 역행하면 시간 기반 유실 판정을 신뢰할 수 없다.
         // 이전 획을 이어 붙이지 않고, release를 한 번 확인한 뒤 다시 시작한다.
         guard timestamp.isFinite else {
+            record(.timestampInvalid)
             reset(requiresRelease: true)
             return
         }
         if let lastInputTimestamp, timestamp <= lastInputTimestamp {
             if timestamp < lastInputTimestamp {
+                record(.timestampInvalid)
                 reset(requiresRelease: true)
             }
             return
@@ -113,11 +164,22 @@ final class GestureDrawingController {
 
         let mapper = VisionCoordinateMapper(imageSize: imageSize, viewSize: viewSize)
 
-        guard let pose,
-              let tip = pose.penTip,
-              let point = mapper.screenPoint(tip)
-        else {
-            handleMissingTip(at: timestamp)
+        // 세 가지를 한 guard로 묶으면 "펜이 사라졌다"까지만 알고 원인은 알 수 없다.
+        // 각각 고칠 곳이 달라서 (카메라 / 임계값 / 레이아웃) 사유를 갈라 기록한다
+        guard let pose else {
+            handleMissingTip(.handNotFound, at: timestamp)
+            return
+        }
+        lastPenTipConfidence = pose.penTipConfidence
+        guard let tip = pose.penTip else {
+            handleMissingTip(
+                pose.penTipConfidence == nil ? .penTipMissing : .penTipLowConfidence,
+                at: timestamp
+            )
+            return
+        }
+        guard let point = mapper.screenPoint(tip) else {
+            handleMissingTip(.mappingFailed, at: timestamp)
             return
         }
 
@@ -125,6 +187,7 @@ final class GestureDrawingController {
         if isStrokeActive,
            let lastSeenAt,
            timestamp - lastSeenAt > Self.maxMissedInterval {
+            record(.missTimeout)
             finishStroke()
             isWaitingForRelease = true
         }
@@ -138,6 +201,7 @@ final class GestureDrawingController {
         }
 
         guard let ratio else {
+            record(.gripUnavailable)
             if isStrokeActive {
                 holdUncertain(point: point, timestamp: timestamp)
             } else {
@@ -152,6 +216,7 @@ final class GestureDrawingController {
                 finishStroke()
                 publish(.hover, point: point, ratio: ratio)
             } else if pendingWindowExceeded(at: timestamp) {
+                record(.pendingTimeout)
                 // 마지막 unknown 프레임과 pinch 재확인 사이가 길어도 100ms 상한을 지킨다.
                 // 같은 pinch로 획을 다시 시작하지 않고 release 확인까지 재무장을 막는다.
                 finishStroke()
@@ -221,14 +286,22 @@ final class GestureDrawingController {
         publish(.hover, point: point, ratio: ratio)
     }
 
-    private func handleMissingTip(at timestamp: TimeInterval) {
+    private func handleMissingTip(_ reason: TrackingLoss, at timestamp: TimeInterval) {
+        record(reason)
         if isStrokeActive,
            let lastSeenAt,
            timestamp - lastSeenAt > Self.maxMissedInterval {
+            record(.missTimeout)
             finishStroke()
             isWaitingForRelease = true
         }
         publish(.hidden, point: nil, ratio: nil)
+    }
+
+    /// 유실 사유를 누적한다. 계측이 끝나면 이 경로 전체를 제거한다 (#26)
+    private func record(_ reason: TrackingLoss) {
+        lastLoss = reason
+        lossCounts[reason, default: 0] += 1
     }
 
     /// 비율이 없는 좌표는 아직 잉크가 아니다. 짧게 보관한 뒤 pinch 재확인 때만 커밋한다.
@@ -239,6 +312,7 @@ final class GestureDrawingController {
         let exceededTime = pendingWindowExceeded(at: timestamp)
 
         if exceededCount || exceededTime {
+            record(.pendingTimeout)
             finishStroke()
             isWaitingForRelease = true
         }
@@ -271,7 +345,10 @@ final class GestureDrawingController {
                 state: state,
                 point: point,
                 gripRatio: ratio,
-                isWaitingForRelease: isWaitingForRelease
+                isWaitingForRelease: isWaitingForRelease,
+                lastLoss: lastLoss,
+                lossCounts: lossCounts,
+                penTipConfidence: lastPenTipConfidence
             )
         )
     }
