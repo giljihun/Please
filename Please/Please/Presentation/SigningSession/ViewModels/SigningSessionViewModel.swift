@@ -79,9 +79,10 @@ final class SigningSessionViewModel {
 
     var isHandOverlayEnabled = false
 
-    /// 제스처 드로잉 모드 (#13). 스켈레톤과 독립 토글 —
-    /// 뼈대가 화면을 덮으면 정작 사인 선의 품질을 볼 수 없기 때문
-    var isGestureDrawingEnabled = false
+    /// 제스처 드로잉 모드 (#13). 제품의 기본 입력이며, 사용자가 버튼으로 끈 경우에만
+    /// 직접 터치 폴백으로 전환한다. Vision 성능을 근거로 앱이 자동 전환하지 않는다.
+    /// 스켈레톤과는 독립 토글 — 뼈대가 화면을 덮으면 사인 선의 품질을 볼 수 없기 때문이다.
+    var isGestureDrawingEnabled = true
 
     private(set) var isHandDetected = false
     private(set) var visionMilliseconds: Double = 0

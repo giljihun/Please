@@ -7,167 +7,279 @@
 
 import UIKit
 
-/// 손 제스처를 드로잉 입력으로 번역하는 컨트롤러.
+/// 제스처 컨트롤러가 필요로 하는 최소 캔버스 계약.
 ///
-/// 하는 일은 셋뿐이다:
-/// ① 언제 그릴지 판정(그립) ② 좌표 안정화(스무딩) ③ 캔버스에 전달
-///
-/// 별도 타입으로 분리한 이유: "언제 그릴지"의 판정 기준은 실기기에서 바뀔 값이다.
-/// (엄지 방아쇠 → 손목 회전 → 손 크기 기반 깊이 판정 등 후보가 여럿 남아 있다)
-/// 판정을 이 타입 안에만 가둬두면 기준을 갈아끼워도 캡처·캔버스 코드는 손댈 일이 없다
+/// Vision 판정과 실제 렌더링을 분리해 상태 머신을 UI 없이 검증할 수 있게 한다.
+@MainActor
+protocol GestureStrokeSink: AnyObject {
+    func beginStroke(at point: CGPoint)
+    func appendPoint(_ point: CGPoint)
+    func endStroke()
+}
+
+extension DrawingCanvasView: GestureStrokeSink {}
+
+/// 검지 끝을 펜 위치로, 엄지·검지 pinch를 pen-down 신호로 번역한다.
+@MainActor
 final class GestureDrawingController {
 
+    /// 펜 피드백이 표현할 네 가지 상태.
+    enum State: Equatable {
+        case hidden
+        case hover
+        case drawing
+        case uncertain
+    }
+
+    /// 화면의 펜 커서·사운드 같은 피드백에 필요한 최신 값.
+    struct Feedback: Equatable {
+        let state: State
+        let point: CGPoint?
+        let gripRatio: CGFloat?
+        let isWaitingForRelease: Bool
+    }
+
+    private struct PendingSample {
+        let point: CGPoint
+        let timestamp: TimeInterval
+    }
+
     // MARK: - 판정 기준
-    // 이력현상(hysteresis): 문턱을 하나만 두면 그 값 근처에서 손이 미세하게 떨릴 때
-    // 선이 끊겼다 이어졌다를 반복한다. 들어가는 문턱과 나오는 문턱을 벌려두면
-    // 경계에서 흔들려도 상태가 뒤집히지 않는다 (에어컨이 24도에 켜고 26도에 끄는 것과 같은 원리)
 
-    // ⚠️ 기준자가 손목→중지밑동에서 검지 길이로 바뀌어(gripScale) 아래 두 값은
-    //    아직 실측 전이다. 오버레이의 비율 숫자를 보고 다시 잡아야 한다
-
-    /// 엄지·검지가 이만큼 붙으면 펜을 쥔 것으로 본다 (검지 길이 대비)
+    /// 하나의 문턱만 쓰면 경계에서 떨릴 때 획이 잘게 끊기므로 진입·이탈 값을 벌린다.
     private static let gripEnterRatio: CGFloat = 0.30
-    /// 이만큼 벌어져야 뗀 것으로 본다
     private static let gripExitRatio: CGFloat = 0.45
 
-    /// 새 좌표를 얼마나 반영할지 (작을수록 부드럽지만 손을 늦게 따라온다)
+    /// 새 좌표 반영률. 작을수록 부드럽지만 펜이 손을 늦게 따라간다.
     private static let smoothingFactor: CGFloat = 0.4
 
-    /// 펜 끝을 놓쳐도 획을 유지할 시간 (초).
-    ///
-    /// 실시간 포즈 추정은 프레임마다 신뢰도가 출렁이는 게 정상이고, 사인처럼 빠른
-    /// 움직임에서는 모션 블러로 검지 끝이 순간 사라진다. 한 프레임에 반응해 획을 닫으면
-    /// 손을 떼지도 않았는데 사인이 조각난다.
-    /// 그렇다고 무한정 참으면 손이 실제로 사라졌다 돌아올 때 화면을 가로지르는
-    /// 직선이 생기므로 상한을 둔다 — 실기기에서 조정할 값.
-    ///
-    /// 프레임 수가 아니라 **시간**으로 재는 이유: update(_:)는 매 카메라 프레임마다
-    /// 호출되지 않는다. HandPoseDetector가 분석 중이면 백프레셔로 프레임을 버리고,
-    /// 버려진 프레임은 여기까지 오지도 않는다. 즉 호출 간격은 Vision 처리 속도에
-    /// 종속된 가변값이라, 횟수로 세면 발열·저사양에서 상수의 실제 의미가 조용히 달라진다
-    private static let maxMissedInterval: CFTimeInterval = 0.13
+    /// 검지 끝을 잠깐 놓친 프레임 때문에 획을 즉시 끊지 않는 허용 시간.
+    private static let maxMissedInterval: TimeInterval = 0.13
 
-    /// 그립 판정이 불가능한 상태(관절 누락)를 참아줄 시간 (초).
-    ///
-    /// 엄지·검지를 붙이는 동작 자체가 엄지를 검지 뒤로 숨기므로, 판정 불가를
-    /// 곧바로 "뗐다"로 읽으면 쥐고 있는데 사인이 조각난다.
-    /// 그렇다고 무제한 참으면 **실제로 뗐는데도 계속 그려진다** —
-    /// 2026-08-26 실기기 테스트에서 나온 문제다. 상한을 둬서 양쪽을 모두 막는다
-    private static let maxGripUnknownInterval: CFTimeInterval = 0.25
+    /// pinch 판정 불가 좌표를 캔버스에 확정하기 전 보류하는 최대 시간과 개수.
+    /// 시간과 개수를 함께 제한해 프레임률이 달라도 메모리와 지연이 상한을 넘지 않게 한다.
+    private static let maxPendingInterval: TimeInterval = 0.10
+    private static let maxPendingSampleCount = 6
 
     // MARK: - 상태
 
-    private let canvas: DrawingCanvasView
-    private var isDrawing = false
+    private let strokeSink: any GestureStrokeSink
+    private var isStrokeActive = false
     private var smoothedPoint: CGPoint?
+    private var lastSeenAt: TimeInterval?
+    private var lastInputTimestamp: TimeInterval?
+    private var pendingSamples: [PendingSample] = []
+    private var isWaitingForRelease = false
 
-    /// 펜 끝을 마지막으로 얻은 시각.
-    ///
-    /// 벽시계(CFAbsoluteTimeGetCurrent)가 아니라 단조 증가 시계를 쓰는 이유:
-    /// 벽시계는 NTP 동기화나 사용자의 시간 변경으로 앞뒤로 튈 수 있다.
-    /// 사인 도중 시계가 앞으로 뛰면 멀쩡한 획이 유실로 판정돼 끊긴다 —
-    /// "두 시점 사이의 간격"을 재는 데는 언제나 단조 시계를 쓴다
-    private var lastSeenAt: CFTimeInterval?
+    private(set) var state: State = .hidden
 
-    /// 그립 비율을 마지막으로 계산할 수 있었던 시각
-    private var lastRatioAt: CFTimeInterval?
+    /// 상태뿐 아니라 좌표도 매 프레임 전달한다. 펜 커서가 hover 중에도 손을 따라야 하기 때문이다.
+    var onFeedback: ((Feedback) -> Void)?
 
-    init(canvas: DrawingCanvasView) {
-        self.canvas = canvas
+    init(strokeSink: any GestureStrokeSink) {
+        self.strokeSink = strokeSink
+    }
+
+    /// 기존 프로덕션 호출부를 유지하는 편의 초기화 경로.
+    convenience init(canvas: DrawingCanvasView) {
+        self.init(strokeSink: canvas)
     }
 
     // MARK: - 입력
 
-    /// 프레임마다 호출. 손이 잡히지 않았으면 pose에 nil을 넘긴다
-    func update(pose: HandPose?, imageSize: CGSize, viewSize: CGSize) {
+    /// Vision 결과를 반영한다.
+    ///
+    /// `timestamp`는 호출자가 주입하는 단조 증가 시간이어야 한다. 프레임 횟수가 아니라
+    /// 실제 경과 시간을 써야 Vision 백프레셔로 프레임이 버려져도 허용 시간이 일정하다.
+    func update(
+        pose: HandPose?,
+        imageSize: CGSize,
+        viewSize: CGSize,
+        timestamp: TimeInterval
+    ) {
+        // 캡처 PTS가 유효하지 않거나 역행하면 시간 기반 유실 판정을 신뢰할 수 없다.
+        // 이전 획을 이어 붙이지 않고, release를 한 번 확인한 뒤 다시 시작한다.
+        guard timestamp.isFinite else {
+            reset(requiresRelease: true)
+            return
+        }
+        if let lastInputTimestamp, timestamp <= lastInputTimestamp {
+            if timestamp < lastInputTimestamp {
+                reset(requiresRelease: true)
+            }
+            return
+        }
+        lastInputTimestamp = timestamp
+
         let mapper = VisionCoordinateMapper(imageSize: imageSize, viewSize: viewSize)
 
         guard let pose,
               let tip = pose.penTip,
               let point = mapper.screenPoint(tip)
         else {
-            handleMissedFrame()
+            handleMissingTip(at: timestamp)
             return
         }
 
-        // 성공 경로에서도 공백을 재는 이유: 유실은 update()가 호출돼야 감지되는데,
-        // 프레임 공급 자체가 끊기면 update()가 아예 불리지 않는다.
-        // (Vision이 한 프레임을 오래 붙들거나, 카메라가 인터럽션으로 멈추는 경우)
-        // 그 구간을 지나 다시 손이 잡히면 handleMissedFrame()을 거치지 않고
-        // 곧장 여기로 들어와, 공백 양끝을 잇는 직선이 획에 추가된다
-        let now = CACurrentMediaTime()
-        if isDrawing, let lastSeenAt, now - lastSeenAt > Self.maxMissedInterval {
-            reset()  // 이어붙이지 않고 끊는다 — 아래에서 새 획으로 다시 판정된다
+        // 분석 공백 뒤의 좌표를 이전 획에 연결하면 화면을 가로지르는 직선이 생긴다.
+        if isStrokeActive,
+           let lastSeenAt,
+           timestamp - lastSeenAt > Self.maxMissedInterval {
+            finishStroke()
+            isWaitingForRelease = true
         }
-        lastSeenAt = now
+        lastSeenAt = timestamp
 
         let ratio = pose.gripRatio(imageSize: imageSize)
-        if ratio != nil { lastRatioAt = now }
 
-        if isDrawing {
-            if let ratio {
-                if ratio >= Self.gripExitRatio {
-                    endStroke()
-                } else {
-                    canvas.appendPoint(smooth(point))
-                }
-            } else if let lastRatioAt, now - lastRatioAt > Self.maxGripUnknownInterval {
-                // 판정 불가가 너무 오래 이어졌다 — 뗐는데 못 읽고 있을 가능성이 크다.
-                // 계속 그리면 손을 뗀 뒤의 궤적까지 사인에 들어간다
-                endStroke()
-            } else {
-                // 잠깐의 판정 불가는 참는다 — 이유는 [maxGripUnknownInterval] 주석 참고
-                canvas.appendPoint(smooth(point))
-            }
-        } else if let ratio, ratio <= Self.gripEnterRatio {
-            // 시작할 때는 비율이 확인돼야 한다 — 못 보고 긋기 시작하지 않는다
-            isDrawing = true
-            // 새 획은 현재 위치에서 시작한다 — 직전 획의 스무딩 이력을 물려받으면
-            // 획이 엉뚱한 곳에서 끌려오며 시작된다
-            smoothedPoint = point
-            canvas.beginStroke(at: point)
-        }
-    }
-
-    /// 진행 중인 획을 정리하고 스무딩 이력을 버린다 (모드 종료·손 유실)
-    func reset() {
-        if isDrawing {
-            endStroke()
-        }
-        smoothedPoint = nil
-        lastSeenAt = nil
-        lastRatioAt = nil
-    }
-
-    /// 펜 끝을 얻지 못한 프레임 처리.
-    ///
-    /// 그리는 중이면 잠깐은 참는다 — 이유는 [maxMissedInterval] 주석 참고.
-    /// 그립 비율이 nil일 때 획을 끊지 않는 것과 같은 원칙이다:
-    /// 인식이 잠깐 흔들린 것과 사용자가 손을 뗀 것은 다르다
-    private func handleMissedFrame() {
-        guard isDrawing, let lastSeenAt else {
-            reset()
+        if isWaitingForRelease {
+            handleReleaseGate(point: point, ratio: ratio)
             return
         }
-        if CACurrentMediaTime() - lastSeenAt > Self.maxMissedInterval {
-            reset()
+
+        guard let ratio else {
+            if isStrokeActive {
+                holdUncertain(point: point, timestamp: timestamp)
+            } else {
+                publish(.uncertain, point: point, ratio: nil)
+            }
+            return
+        }
+
+        if isStrokeActive {
+            if ratio >= Self.gripExitRatio {
+                // 보류 좌표는 사용자가 이미 손을 뗀 뒤의 움직임일 수 있으므로 폐기한다.
+                finishStroke()
+                publish(.hover, point: point, ratio: ratio)
+            } else if pendingWindowExceeded(at: timestamp) {
+                // 마지막 unknown 프레임과 pinch 재확인 사이가 길어도 100ms 상한을 지킨다.
+                // 같은 pinch로 획을 다시 시작하지 않고 release 확인까지 재무장을 막는다.
+                finishStroke()
+                isWaitingForRelease = true
+                publish(.uncertain, point: point, ratio: ratio)
+            } else {
+                // pinch가 다시 확인된 경우에만 보류 좌표를 시간 순서대로 확정한다.
+                let confirmedPoint = appendConfirmedSamples(endingAt: point)
+                publish(.drawing, point: confirmedPoint, ratio: ratio)
+            }
+        } else if ratio <= Self.gripEnterRatio {
+            beginStroke(at: point)
+            publish(.drawing, point: point, ratio: ratio)
+        } else {
+            publish(.hover, point: point, ratio: ratio)
         }
     }
 
-    private func endStroke() {
-        isDrawing = false
-        smoothedPoint = nil  // 획 사이에 이력을 남기지 않는다
-        canvas.endStroke()
+    /// 진행 중 획과 추적 이력을 비운다.
+    ///
+    /// 사용자가 캔버스를 지우는 경우 `requiresRelease`를 켜면, 지운 순간의 pinch가
+    /// 다음 프레임에서 곧바로 새 획을 시작하지 않는다. open 상태를 한 번 확인한 뒤 재무장한다.
+    func reset(requiresRelease: Bool = false) {
+        finishStroke()
+        lastSeenAt = nil
+        lastInputTimestamp = nil
+        isWaitingForRelease = requiresRelease
+        publish(.hidden, point: nil, ratio: nil)
+    }
+
+    // MARK: - 상태 전이
+
+    private func beginStroke(at point: CGPoint) {
+        pendingSamples.removeAll(keepingCapacity: true)
+        smoothedPoint = point
+        isStrokeActive = true
+        strokeSink.beginStroke(at: point)
+    }
+
+    /// 획 종료 시 확정되지 않은 좌표는 항상 폐기한다.
+    private func finishStroke() {
+        pendingSamples.removeAll(keepingCapacity: true)
+        guard isStrokeActive else {
+            smoothedPoint = nil
+            return
+        }
+
+        isStrokeActive = false
+        smoothedPoint = nil
+        strokeSink.endStroke()
+    }
+
+    private func handleReleaseGate(point: CGPoint, ratio: CGFloat?) {
+        guard let ratio else {
+            publish(.uncertain, point: point, ratio: nil)
+            return
+        }
+
+        guard ratio >= Self.gripExitRatio else {
+            // 좌표와 pinch는 읽히지만 이전 생명주기가 끝나지 않은 상태다.
+            // armed 상태인 hover로 보이면 사용자가 입력 거부를 인식할 수 없다.
+            publish(.uncertain, point: point, ratio: ratio)
+            return
+        }
+        isWaitingForRelease = false
+        // gate가 열린 프레임도 hover로 남긴다. 새 pinch는 다음 프레임부터 시작한다.
+        publish(.hover, point: point, ratio: ratio)
+    }
+
+    private func handleMissingTip(at timestamp: TimeInterval) {
+        if isStrokeActive,
+           let lastSeenAt,
+           timestamp - lastSeenAt > Self.maxMissedInterval {
+            finishStroke()
+            isWaitingForRelease = true
+        }
+        publish(.hidden, point: nil, ratio: nil)
+    }
+
+    /// 비율이 없는 좌표는 아직 잉크가 아니다. 짧게 보관한 뒤 pinch 재확인 때만 커밋한다.
+    private func holdUncertain(point: CGPoint, timestamp: TimeInterval) {
+        pendingSamples.append(PendingSample(point: point, timestamp: timestamp))
+
+        let exceededCount = pendingSamples.count > Self.maxPendingSampleCount
+        let exceededTime = pendingWindowExceeded(at: timestamp)
+
+        if exceededCount || exceededTime {
+            finishStroke()
+            isWaitingForRelease = true
+        }
+        publish(.uncertain, point: point, ratio: nil)
+    }
+
+    private func pendingWindowExceeded(at timestamp: TimeInterval) -> Bool {
+        pendingSamples.first.map {
+            timestamp - $0.timestamp > Self.maxPendingInterval
+        } ?? false
+    }
+
+    /// 보류된 원시 좌표를 순서대로 스무딩해야, 폐기된 좌표가 EMA 이력에 섞이지 않는다.
+    @discardableResult
+    private func appendConfirmedSamples(endingAt point: CGPoint) -> CGPoint {
+        for sample in pendingSamples {
+            strokeSink.appendPoint(smooth(sample.point))
+        }
+        pendingSamples.removeAll(keepingCapacity: true)
+
+        let confirmedPoint = smooth(point)
+        strokeSink.appendPoint(confirmedPoint)
+        return confirmedPoint
+    }
+
+    private func publish(_ state: State, point: CGPoint?, ratio: CGFloat?) {
+        self.state = state
+        onFeedback?(
+            Feedback(
+                state: state,
+                point: point,
+                gripRatio: ratio,
+                isWaitingForRelease: isWaitingForRelease
+            )
+        )
     }
 
     // MARK: - 스무딩
 
-    /// 지수 이동평균(EMA). Vision 좌표는 프레임마다 몇 픽셀씩 튀는데
-    /// 그대로 그리면 선이 지렁이처럼 떨린다. 직전 좌표와 섞어 흔들림을 눌러준다.
-    /// 획이 진행 중일 때만 호출된다 — 쉬는 동안의 좌표가 섞이면 다음 획이 끌려온다
     private func smooth(_ point: CGPoint) -> CGPoint {
         guard let previous = smoothedPoint else {
-            // 첫 좌표는 섞을 대상이 없다 — 그대로 채택 (엉뚱한 곳에서 끌려오는 지연 방지)
             smoothedPoint = point
             return point
         }

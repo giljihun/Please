@@ -103,6 +103,11 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
     struct Result: Sendable {
         let pose: HandPose?
         let processingMilliseconds: Double
+        /// 캡처 타임라인 기준 표시 시각(초).
+        ///
+        /// Vision 완료 시각이 아니라 프레임이 촬영된 시각을 보존해야, 처리 시간이
+        /// 순간적으로 늘어도 소비자가 어느 결과가 더 최신인지 정확히 판단할 수 있다.
+        let presentationTimestamp: Double
         /// 방향 보정 후의 이미지 크기. 오버레이가 화면 좌표로 변환할 때 필요하다
         /// (세로 모드에서 버퍼는 가로로 누워 있으므로 폭·높이가 뒤바뀐다)
         let uprightImageSize: CGSize
@@ -141,6 +146,7 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
 
         let start = CACurrentMediaTime()
+        let presentationTimestamp = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
 
         // 방향 보정 후 크기 — 90도 회전이므로 폭과 높이가 뒤바뀐다
         let uprightSize = CGSize(
@@ -163,15 +169,30 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         do {
             try handler.perform([request])
         } catch {
-            return Result(pose: nil, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
+            return Result(
+                pose: nil,
+                processingMilliseconds: elapsed(since: start),
+                presentationTimestamp: presentationTimestamp,
+                uprightImageSize: uprightSize
+            )
         }
 
         guard let observation = request.results?.first else {
-            return Result(pose: nil, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
+            return Result(
+                pose: nil,
+                processingMilliseconds: elapsed(since: start),
+                presentationTimestamp: presentationTimestamp,
+                uprightImageSize: uprightSize
+            )
         }
 
         let pose = makePose(from: observation)
-        return Result(pose: pose, processingMilliseconds: elapsed(since: start), uprightImageSize: uprightSize)
+        return Result(
+            pose: pose,
+            processingMilliseconds: elapsed(since: start),
+            presentationTimestamp: presentationTimestamp,
+            uprightImageSize: uprightSize
+        )
     }
 
     private func makePose(from observation: VNHumanHandPoseObservation) -> HandPose? {
