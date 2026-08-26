@@ -70,7 +70,17 @@ final class GestureDrawingController {
             handleMissedFrame()
             return
         }
-        lastSeenAt = CFAbsoluteTimeGetCurrent()
+
+        // 성공 경로에서도 공백을 재는 이유: 유실은 update()가 호출돼야 감지되는데,
+        // 프레임 공급 자체가 끊기면 update()가 아예 불리지 않는다.
+        // (Vision이 한 프레임을 오래 붙들거나, 카메라가 인터럽션으로 멈추는 경우)
+        // 그 구간을 지나 다시 손이 잡히면 handleMissedFrame()을 거치지 않고
+        // 곧장 여기로 들어와, 공백 양끝을 잇는 직선이 획에 추가된다
+        let now = CFAbsoluteTimeGetCurrent()
+        if isDrawing, let lastSeenAt, now - lastSeenAt > Self.maxMissedInterval {
+            reset()  // 이어붙이지 않고 끊는다 — 아래에서 새 획으로 다시 판정된다
+        }
+        lastSeenAt = now
 
         let ratio = pose.gripRatio(imageSize: imageSize)
 
