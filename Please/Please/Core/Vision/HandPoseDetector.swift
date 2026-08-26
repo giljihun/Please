@@ -52,6 +52,15 @@ nonisolated struct HandPose: Sendable {
         return index.location
     }
 
+    /// 검지 끝의 신뢰도. 관절 자체가 없으면 nil.
+    ///
+    /// penTip이 nil일 때 원인을 가르기 위해 필요하다.
+    /// nil이면 "모델이 검지를 아예 못 찾았다"(카메라·조명 문제),
+    /// 값이 있는데 낮으면 "찾긴 찾았는데 확신이 없다"(임계값 문제)로 대응이 갈린다
+    var penTipConfidence: Float? {
+        joints[.indexTip]?.confidence
+    }
+
     /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
     ///
     /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
