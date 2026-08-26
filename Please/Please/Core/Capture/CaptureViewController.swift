@@ -21,6 +21,7 @@ final class CaptureViewController: UIViewController {
     private let cameraService = CameraService()
     private let handDetector = HandPoseDetector()
     private let handOverlay = HandOverlayView()
+    private lazy var gestureDrawing = GestureDrawingController(canvas: canvasView)
     private var previewLayer: AVCaptureVideoPreviewLayer?
     private var appearTask: Task<Void, Never>?
 
@@ -31,18 +32,49 @@ final class CaptureViewController: UIViewController {
     var onHandDetection: ((Bool, Double) -> Void)?
 
     /// 스켈레톤 오버레이 표시 여부 (개발용 토글)
+    ///
+    /// oldValue 비교가 필수인 이유: updateUIViewController는 VM의 어떤 값이 바뀌어도
+    /// 다시 호출되므로(예: 처리 시간 표시가 매 프레임 갱신) 같은 값이 반복 대입된다.
+    /// 걸러주지 않으면 매 프레임 세대 번호가 올라가 진행 중이던 분석 결과가 전부 폐기된다
     var isHandOverlayEnabled = false {
         didSet {
-            handOverlayGeneration += 1
+            guard isHandOverlayEnabled != oldValue else { return }
             handOverlay.isHidden = !isHandOverlayEnabled
+            if !isHandOverlayEnabled {
+                handOverlay.update(pose: nil, imageSize: .zero)
+            }
+            visionGeneration += 1
             updateFrameHandler()
         }
+    }
+
+    /// 제스처 드로잉 활성화 여부 (개발용 토글).
+    ///
+    /// 스켈레톤과 분리한 이유: 뼈대가 화면을 덮으면 사인 선의 품질을 눈으로 볼 수 없다.
+    /// 반대로 선이 이상할 때는 뼈대를 켜서 원인을 봐야 한다 — 둘은 독립적으로 필요하다
+    var isGestureDrawingEnabled = false {
+        didSet {
+            guard isGestureDrawingEnabled != oldValue else { return }
+            // 제스처 모드에서 터치를 막는 이유: 화면을 스치기만 해도 사인에 선이 섞인다.
+            // 제품 규칙상 터치는 제스처가 안 될 때의 폴백이지 동시 입력이 아니다
+            canvasView.isUserInteractionEnabled = !isGestureDrawingEnabled
+            if !isGestureDrawingEnabled {
+                gestureDrawing.reset()
+            }
+            visionGeneration += 1
+            updateFrameHandler()
+        }
+    }
+
+    /// Vision 분석이 필요한지 — 둘 중 하나라도 켜져 있으면 돌린다
+    private var isVisionEnabled: Bool {
+        isHandOverlayEnabled || isGestureDrawingEnabled
     }
 
     /// 토글 세대 번호. "켜짐 여부"만으로는 껐다 켠 사이에 완료된 분석을 걸러낼 수 없어
     /// (다시 켜면 조건을 통과함), 결과가 어느 세션의 것인지 함께 확인한다.
     /// VM의 명령 카운터·실패 세대와 같은 패턴 — 비동기 결과의 유효성 판단
-    private var handOverlayGeneration = 0
+    private var visionGeneration = 0
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -94,6 +126,8 @@ final class CaptureViewController: UIViewController {
         appearTask?.cancel()
         appearTask = nil
         cameraService.stop()
+        // 프레임이 끊기면 그리던 획이 공중에 뜬 채 남는다 — 여기서 닫아준다
+        gestureDrawing.reset()
     }
 
     /// 권한 확인 → 세션 시작.
@@ -138,12 +172,11 @@ final class CaptureViewController: UIViewController {
 
     // MARK: - 손 인식 파이프라인
 
-    /// 오버레이가 꺼져 있으면 프레임 핸들러 자체를 해제한다 —
+    /// 둘 다 꺼져 있으면 프레임 핸들러 자체를 해제한다 —
     /// 쓰지도 않을 Vision 분석으로 배터리를 태우지 않기 위함
     private func updateFrameHandler() {
-        guard isHandOverlayEnabled else {
+        guard isVisionEnabled else {
             cameraService.setFrameHandler(nil)
-            handOverlay.update(pose: nil, imageSize: .zero)
             return
         }
 
@@ -151,7 +184,7 @@ final class CaptureViewController: UIViewController {
         // 컴파일러가 "샘플 버퍼를 메인 액터로 보낸다"고 판단해 데이터 레이스로 막는다.
         // 버퍼는 이 큐 안에서 소비하고, 결과(값 타입)만 메인으로 넘긴다
         let detector = handDetector
-        let generation = handOverlayGeneration
+        let generation = visionGeneration
         cameraService.setFrameHandler { [weak self] sampleBuffer in
             // 프레임 델리게이트 큐에서 분석 (메인 스레드를 막지 않는다).
             // 처리 중이면 detect가 nil을 반환하며 프레임을 버린다
@@ -161,9 +194,19 @@ final class CaptureViewController: UIViewController {
                 // 토글을 끄는 순간 이미 분석 중이던 프레임의 결과가 뒤늦게 도착할 수 있다.
                 // 그대로 반영하면 다시 켤 때 낡은 손 위치가 한 프레임 스쳐 지나간다
                 guard let self,
-                      self.isHandOverlayEnabled,
-                      self.handOverlayGeneration == generation else { return }
-                self.handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
+                      self.isVisionEnabled,
+                      self.visionGeneration == generation else { return }
+
+                if self.isHandOverlayEnabled {
+                    self.handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
+                }
+                if self.isGestureDrawingEnabled {
+                    self.gestureDrawing.update(
+                        pose: result.pose,
+                        imageSize: result.uprightImageSize,
+                        viewSize: self.canvasView.bounds.size
+                    )
+                }
                 self.onHandDetection?(result.pose != nil, result.processingMilliseconds)
             }
         }

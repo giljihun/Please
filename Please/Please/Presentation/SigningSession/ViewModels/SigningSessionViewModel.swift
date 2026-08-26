@@ -77,6 +77,11 @@ final class SigningSessionViewModel {
     // 개발자 설정 뒤로 숨긴다
 
     var isHandOverlayEnabled = false
+
+    /// 제스처 드로잉 모드 (#13). 스켈레톤과 독립 토글 —
+    /// 뼈대가 화면을 덮으면 정작 사인 선의 품질을 볼 수 없기 때문
+    var isGestureDrawingEnabled = false
+
     private(set) var isHandDetected = false
     private(set) var visionMilliseconds: Double = 0
 
