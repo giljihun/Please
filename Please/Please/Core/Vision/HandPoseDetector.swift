@@ -33,14 +33,30 @@ nonisolated struct HandPose: Sendable {
         [.wrist, .littleMCP, .littlePIP, .littleDIP, .littleTip]
     ]
 
-    /// 펜 끝으로 삼을 지점 — 엄지 끝과 검지 끝의 중점.
-    /// 단일 손가락 끝보다 흔들림이 적다 (두 점의 평균이므로 오차가 상쇄됨)
+    /// 펜 끝으로 삼을 지점 — 검지 끝.
+    ///
+    /// 엄지·검지의 중점을 쓰지 않는 이유: 획을 끊으려 엄지를 벌리는 순간 중점이
+    /// 함께 밀려나 "떼는 동작 자체가 펜 끝을 움직인다" (획 끝에 꼬리가 붙음).
+    /// 검지만 쓰면 엄지가 어떻게 움직이든 펜 끝은 제자리다 —
+    /// 실제 펜도 검지가 방향을 잡고 엄지는 쥐었다 놨다 하는 역할만 한다
     var penTip: CGPoint? {
-        guard let thumb = joints[.thumbTip], let index = joints[.indexTip] else { return nil }
-        return CGPoint(
-            x: (thumb.location.x + index.location.x) / 2,
-            y: (thumb.location.y + index.location.y) / 2
+        joints[.indexTip]?.location
+    }
+
+    /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
+    ///
+    /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
+    /// 절대 거리 대신 비율을 쓰는 이유는 [handScale] 주석 참고
+    var gripRatio: CGFloat? {
+        guard let thumb = joints[.thumbTip],
+              let index = joints[.indexTip],
+              let scale = handScale, scale > 0 else { return nil }
+
+        let distance = hypot(
+            thumb.location.x - index.location.x,
+            thumb.location.y - index.location.y
         )
+        return distance / scale
     }
 
     /// 손 크기 기준자 — 손목에서 중지 밑동까지의 거리.
