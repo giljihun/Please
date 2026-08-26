@@ -30,11 +30,21 @@ final class GestureDrawingController {
     /// 새 좌표를 얼마나 반영할지 (작을수록 부드럽지만 손을 늦게 따라온다)
     private static let smoothingFactor: CGFloat = 0.4
 
+    /// 펜 끝을 놓쳐도 획을 유지할 최대 프레임 수 (30fps 기준 약 0.13초).
+    ///
+    /// 실시간 포즈 추정은 프레임마다 신뢰도가 출렁이는 게 정상이고, 사인처럼 빠른
+    /// 움직임에서는 모션 블러로 검지 끝이 순간 사라진다. 한 프레임에 반응해 획을 닫으면
+    /// 손을 떼지도 않았는데 사인이 조각난다.
+    /// 그렇다고 무한정 참으면 손이 실제로 사라졌다 돌아올 때 화면을 가로지르는
+    /// 직선이 생기므로 상한을 둔다 — 실기기에서 조정할 값
+    private static let maxMissedFrames = 4
+
     // MARK: - 상태
 
     private let canvas: DrawingCanvasView
     private var isDrawing = false
     private var smoothedPoint: CGPoint?
+    private var missedFrames = 0
 
     init(canvas: DrawingCanvasView) {
         self.canvas = canvas
@@ -50,12 +60,10 @@ final class GestureDrawingController {
               let tip = pose.penTip,
               let point = mapper.screenPoint(tip)
         else {
-            // 손을 놓쳤다 = 획 종료. 다시 잡히면 새 획으로 시작한다.
-            // 이어붙이지 않는 이유: 놓친 사이에 손이 어디로 갔는지 알 수 없어
-            // 이어 그리면 화면을 가로지르는 직선이 생긴다
-            reset()
+            handleMissedFrame()
             return
         }
+        missedFrames = 0
 
         let ratio = pose.gripRatio(imageSize: imageSize)
 
@@ -84,6 +92,23 @@ final class GestureDrawingController {
             endStroke()
         }
         smoothedPoint = nil
+        missedFrames = 0
+    }
+
+    /// 펜 끝을 얻지 못한 프레임 처리.
+    ///
+    /// 그리는 중이면 잠깐은 참는다 — 이유는 [maxMissedFrames] 주석 참고.
+    /// 그립 비율이 nil일 때 획을 끊지 않는 것과 같은 원칙이다:
+    /// 인식이 잠깐 흔들린 것과 사용자가 손을 뗀 것은 다르다
+    private func handleMissedFrame() {
+        guard isDrawing else {
+            reset()
+            return
+        }
+        missedFrames += 1
+        if missedFrames > Self.maxMissedFrames {
+            reset()
+        }
     }
 
     private func endStroke() {
