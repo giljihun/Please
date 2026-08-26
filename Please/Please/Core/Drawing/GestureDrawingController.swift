@@ -94,7 +94,12 @@ final class GestureDrawingController {
     // MARK: - 판정 기준
 
     /// 하나의 문턱만 쓰면 경계에서 떨릴 때 획이 잘게 끊기므로 진입·이탈 값을 벌린다.
-    private static let gripEnterRatio: CGFloat = 0.30
+    ///
+    /// 진입을 0.30에서 조였다 (2026-08-26 실기기). 0.30은 손가락이 2~3cm 떨어져 있어도
+    /// 통과해 "붙였다"고 보기 어려웠고, 이동 중에 의도치 않은 획이 시작됐다.
+    /// 시작은 엄격하게, 유지는 관대하게 — 잘못 시작한 획은 지워야 하지만
+    /// 유지가 끊기는 건 이어 그으면 되므로 비용이 다르다
+    private static let gripEnterRatio: CGFloat = 0.22
     private static let gripExitRatio: CGFloat = 0.45
 
     /// 새 좌표 반영률. 작을수록 부드럽지만 펜이 손을 늦게 따라간다.
