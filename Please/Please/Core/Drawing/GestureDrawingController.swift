@@ -30,21 +30,28 @@ final class GestureDrawingController {
     /// 새 좌표를 얼마나 반영할지 (작을수록 부드럽지만 손을 늦게 따라온다)
     private static let smoothingFactor: CGFloat = 0.4
 
-    /// 펜 끝을 놓쳐도 획을 유지할 최대 프레임 수 (30fps 기준 약 0.13초).
+    /// 펜 끝을 놓쳐도 획을 유지할 시간 (초).
     ///
     /// 실시간 포즈 추정은 프레임마다 신뢰도가 출렁이는 게 정상이고, 사인처럼 빠른
     /// 움직임에서는 모션 블러로 검지 끝이 순간 사라진다. 한 프레임에 반응해 획을 닫으면
     /// 손을 떼지도 않았는데 사인이 조각난다.
     /// 그렇다고 무한정 참으면 손이 실제로 사라졌다 돌아올 때 화면을 가로지르는
-    /// 직선이 생기므로 상한을 둔다 — 실기기에서 조정할 값
-    private static let maxMissedFrames = 4
+    /// 직선이 생기므로 상한을 둔다 — 실기기에서 조정할 값.
+    ///
+    /// 프레임 수가 아니라 **시간**으로 재는 이유: update(_:)는 매 카메라 프레임마다
+    /// 호출되지 않는다. HandPoseDetector가 분석 중이면 백프레셔로 프레임을 버리고,
+    /// 버려진 프레임은 여기까지 오지도 않는다. 즉 호출 간격은 Vision 처리 속도에
+    /// 종속된 가변값이라, 횟수로 세면 발열·저사양에서 상수의 실제 의미가 조용히 달라진다
+    private static let maxMissedInterval: CFAbsoluteTime = 0.13
 
     // MARK: - 상태
 
     private let canvas: DrawingCanvasView
     private var isDrawing = false
     private var smoothedPoint: CGPoint?
-    private var missedFrames = 0
+
+    /// 펜 끝을 마지막으로 얻은 시각
+    private var lastSeenAt: CFAbsoluteTime?
 
     init(canvas: DrawingCanvasView) {
         self.canvas = canvas
@@ -63,7 +70,7 @@ final class GestureDrawingController {
             handleMissedFrame()
             return
         }
-        missedFrames = 0
+        lastSeenAt = CFAbsoluteTimeGetCurrent()
 
         let ratio = pose.gripRatio(imageSize: imageSize)
 
@@ -92,21 +99,20 @@ final class GestureDrawingController {
             endStroke()
         }
         smoothedPoint = nil
-        missedFrames = 0
+        lastSeenAt = nil
     }
 
     /// 펜 끝을 얻지 못한 프레임 처리.
     ///
-    /// 그리는 중이면 잠깐은 참는다 — 이유는 [maxMissedFrames] 주석 참고.
+    /// 그리는 중이면 잠깐은 참는다 — 이유는 [maxMissedInterval] 주석 참고.
     /// 그립 비율이 nil일 때 획을 끊지 않는 것과 같은 원칙이다:
     /// 인식이 잠깐 흔들린 것과 사용자가 손을 뗀 것은 다르다
     private func handleMissedFrame() {
-        guard isDrawing else {
+        guard isDrawing, let lastSeenAt else {
             reset()
             return
         }
-        missedFrames += 1
-        if missedFrames > Self.maxMissedFrames {
+        if CFAbsoluteTimeGetCurrent() - lastSeenAt > Self.maxMissedInterval {
             reset()
         }
     }
