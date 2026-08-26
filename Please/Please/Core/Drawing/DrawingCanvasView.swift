@@ -37,6 +37,10 @@ final class DrawingCanvasView: UIView {
 
     private var livePath = UIBezierPath()
 
+    /// 획이 진행 중인지. 제스처 입력은 터치와 달리 began/ended가 시스템에서 보장되지 않아
+    /// (손이 사라지면 endStroke가 여러 번 올 수 있다) 중복 호출을 여기서 막는다
+    private var isStrokeActive = false
+
     // MARK: - 초기화
 
     override init(frame: CGRect) {
@@ -83,9 +87,58 @@ final class DrawingCanvasView: UIView {
             layer.removeFromSuperlayer()
         }
         committedLayers.removeAll()
+        isStrokeActive = false
         livePath.removeAllPoints()
         liveLayer.path = nil
         predictedLayer.path = nil
+    }
+
+    // MARK: - 스트로크 입력 (터치·제스처 공통 경로)
+    // 입력을 "점 시퀀스"로 추상화한 지점. 터치든 Vision 손 좌표든 이 세 메서드로만
+    // 들어오므로 캔버스는 입력원을 알 필요가 없다 (PencilKit을 버린 이유가 바로 이것)
+
+    /// 새 획 시작
+    func beginStroke(at point: CGPoint) {
+        endStroke()  // 이전 획이 남아 있으면 먼저 정리 (제스처 경로의 안전장치)
+        livePath = UIBezierPath()
+        livePath.move(to: point)
+        isStrokeActive = true
+    }
+
+    /// 진행 중인 획에 점 추가
+    func appendPoint(_ point: CGPoint) {
+        guard isStrokeActive else { return }
+        livePath.addLine(to: point)
+        liveLayer.path = livePath.cgPath
+    }
+
+    /// 진행 중인 획을 스타일이 고정된 개별 레이어로 승격하고 임시 레이어를 비운다
+    func endStroke() {
+        guard isStrokeActive else { return }
+        isStrokeActive = false
+
+        defer {
+            livePath = UIBezierPath()
+            liveLayer.path = nil
+            predictedLayer.path = nil
+        }
+        guard !livePath.isEmpty else { return }
+
+        // 이동 없는 단순 탭(점 찍기): 진행 폭이 0에 가까우면 극소 길이 선분을
+        // 추가해 round cap이 점으로 보이게 만든다 (사인의 온점 대응).
+        // 플래그 대신 경로의 기하(bounds)로 판정 — 같은 지점 재샘플에도 안전
+        if livePath.bounds.width < 0.5, livePath.bounds.height < 0.5 {
+            let point = livePath.currentPoint
+            livePath.addLine(to: CGPoint(x: point.x + 0.1, y: point.y))
+        }
+
+        let stroke = CAShapeLayer()
+        configureStrokeLayer(stroke)
+        stroke.strokeColor = strokeColor.cgColor  // 그린 시점의 스타일로 고정
+        stroke.lineWidth = strokeWidth
+        stroke.path = livePath.cgPath
+        layer.insertSublayer(stroke, below: liveLayer)
+        committedLayers.append(stroke)
     }
 
     // MARK: - 터치 처리
@@ -95,8 +148,7 @@ final class DrawingCanvasView: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
-        livePath = UIBezierPath()
-        livePath.move(to: touch.location(in: self))
+        beginStroke(at: touch.location(in: self))
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -122,45 +174,18 @@ final class DrawingCanvasView: UIView {
         if let touch = touches.first {
             appendCoalescedSamples(for: touch, with: event)
         }
-        finishStroke()
+        endStroke()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        finishStroke()
+        endStroke()
     }
 
     /// coalesced 샘플을 진행 중 경로에 추가 (moved/ended 공통 경로)
     private func appendCoalescedSamples(for touch: UITouch, with event: UIEvent?) {
         let coalesced = event?.coalescedTouches(for: touch) ?? [touch]
         for sample in coalesced {
-            livePath.addLine(to: sample.location(in: self))
+            appendPoint(sample.location(in: self))
         }
-        liveLayer.path = livePath.cgPath
-    }
-
-    /// 진행 중 스트로크를 스타일이 고정된 개별 레이어로 승격하고 임시 레이어를 비운다
-    private func finishStroke() {
-        defer {
-            livePath = UIBezierPath()
-            liveLayer.path = nil
-            predictedLayer.path = nil
-        }
-        guard !livePath.isEmpty else { return }
-
-        // 이동 없는 단순 탭(점 찍기): 진행 폭이 0에 가까우면 극소 길이 선분을
-        // 추가해 round cap이 점으로 보이게 만든다 (사인의 온점 대응).
-        // 플래그 대신 경로의 기하(bounds)로 판정 — 같은 지점 재샘플에도 안전
-        if livePath.bounds.width < 0.5, livePath.bounds.height < 0.5 {
-            let point = livePath.currentPoint
-            livePath.addLine(to: CGPoint(x: point.x + 0.1, y: point.y))
-        }
-
-        let stroke = CAShapeLayer()
-        configureStrokeLayer(stroke)
-        stroke.strokeColor = strokeColor.cgColor  // 그린 시점의 스타일로 고정
-        stroke.lineWidth = strokeWidth
-        stroke.path = livePath.cgPath
-        layer.insertSublayer(stroke, below: liveLayer)
-        committedLayers.append(stroke)
     }
 }
