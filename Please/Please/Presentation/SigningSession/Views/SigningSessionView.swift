@@ -33,7 +33,7 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
         controller.canvasView.strokeColor = viewModel.penColor.uiColor
         controller.canvasView.strokeWidth = viewModel.penWidth
         controller.isHandOverlayEnabled = viewModel.isHandOverlayEnabled
-        controller.isGestureDrawingEnabled = viewModel.isGestureDrawingEnabled
+        controller.inputMode = viewModel.inputMode
 
         // 명령 카운터가 바뀌었을 때만 1회 실행 (일회성 명령 패턴)
         if context.coordinator.lastClearSignal != viewModel.clearSignal {
@@ -58,62 +58,6 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
     }
 }
 
-/// 인식 상태와 처리 시간 — 조명·거리별 성능을 현장에서 바로 읽기 위한 지표.
-///
-/// 별도 View 구조체로 뺀 이유: @Observable의 변경 추적 단위는 "그 값을 읽은 body"다.
-/// 처리 시간은 매 프레임 갱신되므로 부모 body에서 읽으면 화면 전체가 초당 30번
-/// 재평가된다. 읽는 곳을 이 작은 뷰로 좁히면 갱신 범위도 여기로 한정된다
-private struct VisionStatsView: View {
-    let viewModel: SigningSessionViewModel
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(viewModel.isHandDetected ? .green : .red)
-                .frame(width: 8, height: 8)
-            Text("\(viewModel.visionMilliseconds, specifier: "%.0f")ms")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.white)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .glassEffect()
-    }
-}
-
-/// 추적 유실 계측 표시 (#26 개발용).
-///
-/// 별도 View로 둔 이유는 VisionStatsView와 같다 — @Observable의 추적 단위는
-/// "그 값을 읽은 body"라, 매 프레임 갱신되는 값은 작은 뷰 안에서 읽어야
-/// 화면 전체가 초당 30번 재평가되지 않는다
-private struct TrackingLossView: View {
-    let viewModel: SigningSessionViewModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                Text(viewModel.lastLossLabel ?? "정상")
-                    .foregroundStyle(viewModel.lastLossLabel == nil ? .green : .orange)
-                if let confidence = viewModel.penTipConfidence {
-                    Text("검지 \(confidence, specifier: "%.2f")")
-                        .foregroundStyle(.white.opacity(0.8))
-                } else {
-                    Text("검지 —")
-                        .foregroundStyle(.red.opacity(0.9))
-                }
-            }
-            if !viewModel.lossSummary.isEmpty {
-                Text(viewModel.lossSummary)
-                    .foregroundStyle(.white.opacity(0.7))
-            }
-        }
-        .font(.caption2.monospacedDigit())
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .glassEffect()
-    }
-}
-
 /// 사인 세션 화면 (PoC: 카메라 프리뷰 + 드로잉 + 펜 도구 오버레이)
 struct SigningSessionView: View {
     @State private var viewModel = SigningSessionViewModel()
@@ -135,17 +79,16 @@ struct SigningSessionView: View {
                 if viewModel.cameraStatus == .interrupted {
                     interruptedBanner
                 }
-                if viewModel.isGestureDrawingEnabled {
-                    HStack {
-                        TrackingLossView(viewModel: viewModel)
-                        Spacer()
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
-                }
                 Spacer()
                 penToolbar
             }
+
+            // 개발용 진단 표시. 이 줄만 지우면 제품 화면만 남는다 (#19, #26)
+            DiagnosticsOverlay(viewModel: viewModel)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                .padding(.horizontal, 20)
+                .padding(.top, 60)
+                .allowsHitTesting(true)
         }
         .toolbarVisibility(.hidden, for: .navigationBar)
         .alert("카메라 오류", isPresented: failedAlertBinding) {
@@ -192,8 +135,8 @@ struct SigningSessionView: View {
 
 private extension SigningSessionView {
 
-    /// 상단 바 — 나가기 + 손 인식 디버그 토글
-    /// PoC 임시. 본 구현에서 "완료" 버튼으로 대체 예정 (#9), 디버그는 제거 (#19)
+    /// 상단 바 — 나가기 + 입력 방식 전환.
+    /// "완료" 버튼은 #9에서 추가된다
     var topBar: some View {
         HStack {
             Button {
@@ -209,35 +152,29 @@ private extension SigningSessionView {
 
             Spacer()
 
-            if viewModel.isHandOverlayEnabled || viewModel.isGestureDrawingEnabled {
-                VisionStatsView(viewModel: viewModel)
-            }
-
-            Button {
-                viewModel.isGestureDrawingEnabled.toggle()
-            } label: {
-                Image(systemName: viewModel.isGestureDrawingEnabled
-                      ? "hand.draw.fill" : "hand.draw")
-                    .font(.title3)
-                    .foregroundStyle(viewModel.isGestureDrawingEnabled ? .green : .white)
-                    .padding(10)
-            }
-            .glassEffect()
-            .accessibilityLabel("제스처로 그리기")
-
-            Button {
-                viewModel.isHandOverlayEnabled.toggle()
-            } label: {
-                Image(systemName: viewModel.isHandOverlayEnabled ? "hand.raised.fill" : "hand.raised")
-                    .font(.title3)
-                    .foregroundStyle(viewModel.isHandOverlayEnabled ? .green : .white)
-                    .padding(10)
-            }
-            .glassEffect()
-            .accessibilityLabel("손 인식 표시")
+            inputModeButton
         }
         .padding(.horizontal, 20)
         .padding(.top, 8)
+    }
+
+    /// 입력 방식 전환 — 제품 기능이다 (개발용 아님).
+    ///
+    /// 두 모드를 나란히 놓지 않고 토글 하나로 둔 이유: 제스처가 기본이고 터치는
+    /// 탈출구라 대등하지 않다. 세그먼트로 놓으면 동등한 선택지로 읽힌다.
+    /// Vision 성능을 근거로 앱이 자동 전환하지는 않는다 — 폴백은 사용자가 고른다
+    var inputModeButton: some View {
+        Button {
+            viewModel.inputMode = viewModel.inputMode.toggled
+        } label: {
+            Image(systemName: viewModel.inputMode.symbolName)
+                .font(.title3)
+                .foregroundStyle(.white)
+                .padding(10)
+        }
+        .glassEffect()
+        .accessibilityLabel(viewModel.inputMode.name)
+        .accessibilityHint("두드리면 \(viewModel.inputMode.toggled.name)로 바뀝니다")
     }
 
     /// 인터럽션 안내 배너 — 사용자 개입이 불필요한 중단이므로 알럿이 아닌 배너로.
