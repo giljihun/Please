@@ -45,8 +45,10 @@ final class GestureDrawingController {
         case penTipLowConfidence
         /// 정규화 좌표를 화면 좌표로 옮기지 못함 — 레이아웃/버퍼 크기 문제
         case mappingFailed
-        /// 그립 판정에 필요한 관절이 없음 — 잉크는 유지되나 판정이 보류된다
+        /// 그립 판정에 필요한 관절이 없음. 직전 판정으로 메우므로 대개 무해하다
         case gripUnavailable
+        /// 직전 판정 유지 시간마저 지나 그립을 정말로 알 수 없는 상태
+        case gripHoldExpired
         /// 유실 허용 시간을 넘겨 획을 끊음
         case missTimeout
         /// 보류 좌표를 확정하지 못한 채 시간이 지나 획을 끊음
@@ -61,7 +63,8 @@ final class GestureDrawingController {
             case .penTipMissing: "검지없음"
             case .penTipLowConfidence: "검지약함"
             case .mappingFailed: "변환실패"
-            case .gripUnavailable: "그립불가"
+            case .gripUnavailable: "그립가림"
+            case .gripHoldExpired: "그립상실"
             case .missTimeout: "유실초과"
             case .pendingTimeout: "보류초과"
             case .timestampInvalid: "시각이상"
@@ -102,8 +105,20 @@ final class GestureDrawingController {
 
     /// pinch 판정 불가 좌표를 캔버스에 확정하기 전 보류하는 최대 시간과 개수.
     /// 시간과 개수를 함께 제한해 프레임률이 달라도 메모리와 지연이 상한을 넘지 않게 한다.
-    private static let maxPendingInterval: TimeInterval = 0.10
-    private static let maxPendingSampleCount = 6
+    ///
+    /// 0.10초/6샘플에서 늘렸다 (2026-08-26 계측). 그 값에서는 정상적인 사인 도중에도
+    /// 보류 초과가 지배적으로 발생했다 — 엄지는 쥐면 검지 뒤로 숨으므로
+    /// 판정 불가가 예외가 아니라 상시 상태였기 때문이다
+    private static let maxPendingInterval: TimeInterval = 0.30
+    private static let maxPendingSampleCount = 20
+
+    /// 그립 비율을 못 구했을 때 직전 값을 대신 쓰는 최대 시간.
+    ///
+    /// 손은 순간이동하지 않으므로 직전 판정은 짧은 구간에서 여전히 유효하다.
+    /// 특히 이 상황이 안전한 이유: 비율을 못 구하는 주된 원인은 **쥘 때 엄지가
+    /// 검지 뒤로 숨는 것**이다. 손을 펴면 엄지가 오히려 더 잘 보여 값이 즉시 돌아온다.
+    /// 즉 값을 유지하면 "아직 쥐고 있다"로 남는데, 그게 실제로 맞다
+    private static let maxGripRatioHoldInterval: TimeInterval = 0.30
 
     // MARK: - 상태
 
@@ -114,6 +129,8 @@ final class GestureDrawingController {
     private var lastInputTimestamp: TimeInterval?
     private var pendingSamples: [PendingSample] = []
     private var isWaitingForRelease = false
+    private var lastRatioValue: CGFloat?
+    private var lastRatioAt: TimeInterval?
 
     private(set) var state: State = .hidden
 
@@ -189,11 +206,10 @@ final class GestureDrawingController {
            timestamp - lastSeenAt > Self.maxMissedInterval {
             record(.missTimeout)
             finishStroke()
-            isWaitingForRelease = true
         }
         lastSeenAt = timestamp
 
-        let ratio = pose.gripRatio(imageSize: imageSize)
+        let ratio = heldRatio(pose.gripRatio(imageSize: imageSize), at: timestamp)
 
         if isWaitingForRelease {
             handleReleaseGate(point: point, ratio: ratio)
@@ -201,7 +217,7 @@ final class GestureDrawingController {
         }
 
         guard let ratio else {
-            record(.gripUnavailable)
+            record(.gripHoldExpired)
             if isStrokeActive {
                 holdUncertain(point: point, timestamp: timestamp)
             } else {
@@ -217,10 +233,10 @@ final class GestureDrawingController {
                 publish(.hover, point: point, ratio: ratio)
             } else if pendingWindowExceeded(at: timestamp) {
                 record(.pendingTimeout)
-                // 마지막 unknown 프레임과 pinch 재확인 사이가 길어도 100ms 상한을 지킨다.
-                // 같은 pinch로 획을 다시 시작하지 않고 release 확인까지 재무장을 막는다.
+                // 획은 끊되 입력을 잠그지는 않는다. 추적이 잠깐 흔들린 것과
+                // 사용자가 손을 뗀 것은 다르며, 쥐고 있는데 다시 못 그리는 쪽이
+                // 획이 잠깐 끊기는 것보다 훨씬 나쁘다 (2026-08-26 계측 근거)
                 finishStroke()
-                isWaitingForRelease = true
                 publish(.uncertain, point: point, ratio: ratio)
             } else {
                 // pinch가 다시 확인된 경우에만 보류 좌표를 시간 순서대로 확정한다.
@@ -243,6 +259,8 @@ final class GestureDrawingController {
         finishStroke()
         lastSeenAt = nil
         lastInputTimestamp = nil
+        lastRatioValue = nil
+        lastRatioAt = nil
         isWaitingForRelease = requiresRelease
         publish(.hidden, point: nil, ratio: nil)
     }
@@ -293,9 +311,23 @@ final class GestureDrawingController {
            timestamp - lastSeenAt > Self.maxMissedInterval {
             record(.missTimeout)
             finishStroke()
-            isWaitingForRelease = true
         }
         publish(.hidden, point: nil, ratio: nil)
+    }
+
+    /// 비율을 못 구한 프레임에서 직전 판정을 대신 쓴다 — 이유는 [maxGripRatioHoldInterval] 참고
+    private func heldRatio(_ ratio: CGFloat?, at timestamp: TimeInterval) -> CGFloat? {
+        if let ratio {
+            lastRatioValue = ratio
+            lastRatioAt = timestamp
+            return ratio
+        }
+
+        record(.gripUnavailable)
+        guard let lastRatioValue,
+              let lastRatioAt,
+              timestamp - lastRatioAt <= Self.maxGripRatioHoldInterval else { return nil }
+        return lastRatioValue
     }
 
     /// 유실 사유를 누적한다. 계측이 끝나면 이 경로 전체를 제거한다 (#26)
@@ -314,7 +346,6 @@ final class GestureDrawingController {
         if exceededCount || exceededTime {
             record(.pendingTimeout)
             finishStroke()
-            isWaitingForRelease = true
         }
         publish(.uncertain, point: point, ratio: nil)
     }
