@@ -23,6 +23,9 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
         controller.onHandDetection = { detected, milliseconds in
             viewModel.handleHandDetection(detected: detected, milliseconds: milliseconds)
         }
+        controller.onTrackingDiagnostics = { feedback in
+            viewModel.handleTrackingDiagnostics(feedback)
+        }
         return controller
     }
 
@@ -78,6 +81,39 @@ private struct VisionStatsView: View {
     }
 }
 
+/// 추적 유실 계측 표시 (#26 개발용).
+///
+/// 별도 View로 둔 이유는 VisionStatsView와 같다 — @Observable의 추적 단위는
+/// "그 값을 읽은 body"라, 매 프레임 갱신되는 값은 작은 뷰 안에서 읽어야
+/// 화면 전체가 초당 30번 재평가되지 않는다
+private struct TrackingLossView: View {
+    let viewModel: SigningSessionViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Text(viewModel.lastLossLabel ?? "정상")
+                    .foregroundStyle(viewModel.lastLossLabel == nil ? .green : .orange)
+                if let confidence = viewModel.penTipConfidence {
+                    Text("검지 \(confidence, specifier: "%.2f")")
+                        .foregroundStyle(.white.opacity(0.8))
+                } else {
+                    Text("검지 —")
+                        .foregroundStyle(.red.opacity(0.9))
+                }
+            }
+            if !viewModel.lossSummary.isEmpty {
+                Text(viewModel.lossSummary)
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+        }
+        .font(.caption2.monospacedDigit())
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .glassEffect()
+    }
+}
+
 /// 사인 세션 화면 (PoC: 카메라 프리뷰 + 드로잉 + 펜 도구 오버레이)
 struct SigningSessionView: View {
     @State private var viewModel = SigningSessionViewModel()
@@ -98,6 +134,14 @@ struct SigningSessionView: View {
                 topBar
                 if viewModel.cameraStatus == .interrupted {
                     interruptedBanner
+                }
+                if viewModel.isGestureDrawingEnabled {
+                    HStack {
+                        TrackingLossView(viewModel: viewModel)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
                 }
                 Spacer()
                 penToolbar

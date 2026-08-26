@@ -119,6 +119,9 @@ final class CaptureViewController: UIViewController {
     /// 손 인식 결과를 개발용 지표로 전달 (#19 검증용 — 인식 성공 여부, 처리 시간)
     var onHandDetection: ((Bool, Double) -> Void)?
 
+    /// 추적 유실 계측을 개발용 지표로 전달 (#26 검증용). 원인 규명이 끝나면 제거한다
+    var onTrackingDiagnostics: ((GestureDrawingController.Feedback) -> Void)?
+
     /// 스켈레톤 오버레이 표시 여부 (개발용 토글)
     ///
     /// oldValue 비교가 필수인 이유: updateUIViewController는 VM의 어떤 값이 바뀌어도
@@ -197,7 +200,9 @@ final class CaptureViewController: UIViewController {
         view.addSubview(handOverlay)
 
         gestureDrawing.onFeedback = { [weak self] feedback in
-            self?.renderGestureFeedback(feedback)
+            guard let self else { return }
+            self.renderGestureFeedback(feedback)
+            self.onTrackingDiagnostics?(feedback)
         }
         gestureDrawing.reset(requiresRelease: isGestureDrawingEnabled)
 

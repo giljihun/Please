@@ -87,6 +87,30 @@ final class SigningSessionViewModel {
     private(set) var isHandDetected = false
     private(set) var visionMilliseconds: Double = 0
 
+    // MARK: - 추적 유실 계측 (#26 개발용)
+    // "펜이 사라졌다"는 같은 현상이라도 원인마다 고칠 곳이 다르다.
+    // 실기기에서 어느 사유가 지배적인지 세어 보고 대응을 고른다
+
+    /// 가장 최근 유실 사유 (짧은 한글 이름)
+    private(set) var lastLossLabel: String?
+
+    /// 상위 3개 사유와 횟수 — 화면이 좁으므로 지배적인 것만 보여준다
+    private(set) var lossSummary = ""
+
+    /// 검지 끝 신뢰도. nil이면 관절 자체가 없다는 뜻이라 카메라 문제,
+    /// 값이 있는데 낮으면 임계값으로 회수 가능하다는 뜻이다
+    private(set) var penTipConfidence: Float?
+
+    func handleTrackingDiagnostics(_ feedback: GestureDrawingController.Feedback) {
+        lastLossLabel = feedback.lastLoss?.shortLabel
+        penTipConfidence = feedback.penTipConfidence
+        lossSummary = feedback.lossCounts
+            .sorted { $0.value > $1.value }
+            .prefix(3)
+            .map { "\($0.key.shortLabel) \($0.value)" }
+            .joined(separator: "  ")
+    }
+
     func handleHandDetection(detected: Bool, milliseconds: Double) {
         isHandDetected = detected
         // 프레임마다 값이 튀면 읽기 어려우므로 이동평균으로 완만하게 (표시용)
