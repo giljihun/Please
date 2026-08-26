@@ -95,12 +95,17 @@ final class GestureDrawingController {
 
     /// 하나의 문턱만 쓰면 경계에서 떨릴 때 획이 잘게 끊기므로 진입·이탈 값을 벌린다.
     ///
-    /// 진입을 0.30에서 조였다 (2026-08-26 실기기). 0.30은 손가락이 2~3cm 떨어져 있어도
-    /// 통과해 "붙였다"고 보기 어려웠고, 이동 중에 의도치 않은 획이 시작됐다.
-    /// 시작은 엄격하게, 유지는 관대하게 — 잘못 시작한 획은 지워야 하지만
-    /// 유지가 끊기는 건 이어 그으면 되므로 비용이 다르다
-    private static let gripEnterRatio: CGFloat = 0.22
-    private static let gripExitRatio: CGFloat = 0.45
+    /// 실측 기준 (2026-08-26, 검지 길이 대비 비율):
+    /// 꽉 잡으면 0.08, 붙이면 0.13. 검지 길이를 7.5cm로 보면 비율 × 7.5cm가 실제 간격이다.
+    ///
+    /// 이탈이 0.45(3.4cm)였을 때 문제가 있었다. 손가락을 의식적으로 활짝 벌려야 하는
+    /// 거리라, 사인 중 자연스럽게 1.5~3cm 벌어지는 구간이 전부 "아직 쥐고 있음"으로
+    /// 판정돼 이동 중에도 획이 계속 그려졌다.
+    ///
+    /// 0.32(2.4cm)는 의도적으로 벌려야 닿으면서 사인 중 흔들림으로는 닿지 않는 거리다.
+    /// 간격 0.12는 좌표 노이즈(±0.03)의 4배라 경계에서 상태가 뒤집히지 않는다
+    private static let gripEnterRatio: CGFloat = 0.20
+    private static let gripExitRatio: CGFloat = 0.32
 
     /// 새 좌표 반영률. 작을수록 부드럽지만 펜이 손을 늦게 따라간다.
     private static let smoothingFactor: CGFloat = 0.4
