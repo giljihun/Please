@@ -126,6 +126,9 @@ final class CaptureViewController: UIViewController {
         appearTask?.cancel()
         appearTask = nil
         cameraService.stop()
+        // 세대를 먼저 올리는 이유: stop()은 이미 분석에 들어간 프레임까지 취소하지 못한다.
+        // 순서를 바꾸면 reset() 뒤에 도착한 결과가 검사를 통과해 새 획을 열어버린다
+        visionGeneration += 1
         // 프레임이 끊기면 그리던 획이 공중에 뜬 채 남는다 — 여기서 닫아준다
         gestureDrawing.reset()
     }
@@ -168,6 +171,16 @@ final class CaptureViewController: UIViewController {
     /// 실패 알럿의 "다시 시도" 동선 (SwiftUI → VM retrySignal → 여기)
     func retryCamera() {
         cameraService.start()
+    }
+
+    /// 캔버스 지우기 (SwiftUI → VM clearSignal → 여기).
+    ///
+    /// 캔버스를 직접 비우지 않고 이 경로를 거치는 이유: 그립 중에 지우면
+    /// 캔버스는 획을 닫지만 제스처 컨트롤러는 여전히 "그리는 중"으로 남는다.
+    /// 그 상태에서는 다음 프레임의 점이 전부 버려져, 손을 한 번 뗐다 다시 쥐어야 복구된다
+    func clearCanvas() {
+        gestureDrawing.reset()
+        canvasView.clear()
     }
 
     // MARK: - 손 인식 파이프라인
