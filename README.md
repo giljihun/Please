@@ -16,6 +16,7 @@ iOS 26+ · Xcode 26 · Swift 6
 | 세션 화면만 UIKit, 나머지는 SwiftUI | `coalesced`/`predictedTouches` 드로잉 품질은 UIKit 터치 이벤트에서만 |
 | 드로잉은 커스텀 캔버스 (PencilKit ✗) | 입력을 점 시퀀스로 추상화해야 Vision 손 좌표도 같은 경로로 주입 |
 | 기본 입력은 공중 제스처 (터치는 폴백) | 화면에 닿은 손은 전면 카메라 화각 밖 — 사인하는 손이 영상에 안 담김 |
+| 제스처는 Apple식 pinch 생명주기 | 검지 끝이 펜 위치, pinch가 pen-down, release가 즉시 pen-up |
 | 녹화는 화면 캡처 ✗, 프레임 합성 | UI 요소를 결과물에서 제외해야 함 (AVAssetWriter) |
 | SwiftUI ↔ UIKit은 공유 `@Observable` | 양쪽이 같은 상태를 보는 문제 → 이벤트 전달이 아닌 상태 관찰 |
 | 저장은 앱 Documents + SwiftData | 랜덤 한글 이름·썸네일 등 메타데이터가 필요 |
@@ -33,5 +34,5 @@ Resources/     Assets
 
 ## 현황
 
-PoC 검증 단계 — 카메라 프리뷰 + 터치 드로잉 완료, 합성 녹화 진행 예정.
+PoC 검증 단계 — 카메라 프리뷰, 터치 폴백, Apple-like Vision pinch 드로잉 구현 완료. 실기기 제스처 수치 검증 후 합성 녹화 진행 예정.
 [마일스톤](https://github.com/giljihun/Please/milestones)에서 로드맵 확인.
