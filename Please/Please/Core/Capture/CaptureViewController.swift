@@ -139,33 +139,31 @@ final class CaptureViewController: UIViewController {
         }
     }
 
-    /// 제스처 드로잉 활성화 여부 (개발용 토글).
-    ///
-    /// 스켈레톤과 분리한 이유: 뼈대가 화면을 덮으면 사인 선의 품질을 눈으로 볼 수 없다.
-    /// 반대로 선이 이상할 때는 뼈대를 켜서 원인을 봐야 한다 — 둘은 독립적으로 필요하다
-    var isGestureDrawingEnabled = false {
+    /// 사인 입력 방식. 기본은 제스처이며 터치는 사용자가 직접 고르는 폴백이다
+    var inputMode: InputMode = .gesture {
         didSet {
-            guard isGestureDrawingEnabled != oldValue else { return }
+            guard inputMode != oldValue else { return }
+            let usesGesture = inputMode == .gesture
             // 켜지는 순간 진행 중이던 터치 획을 먼저 확정한다.
             // isUserInteractionEnabled = false는 "새 터치를 받지 않는다"는 뜻일 뿐,
             // 히트테스트는 터치가 시작될 때 한 번만 하므로 이미 배정된 터치는 계속 도착한다
-            if isGestureDrawingEnabled {
+            if usesGesture {
                 canvasView.endStroke()
             }
             // 제스처 모드에서 터치를 막는 이유: 화면을 스치기만 해도 사인에 선이 섞인다.
             // 제품 규칙상 터치는 제스처가 안 될 때의 폴백이지 동시 입력이 아니다
-            canvasView.isUserInteractionEnabled = !isGestureDrawingEnabled
+            canvasView.isUserInteractionEnabled = !usesGesture
             // 모드를 켤 때 이미 pinch 중인 손을 새 획으로 오인하지 않도록,
             // open 상태를 한 번 본 뒤에만 Apple식 새 pinch 생명주기를 시작한다.
-            gestureDrawing.reset(requiresRelease: isGestureDrawingEnabled)
+            gestureDrawing.reset(requiresRelease: inputMode == .gesture)
             visionGeneration += 1
             updateFrameHandler()
         }
     }
 
-    /// Vision 분석이 필요한지 — 둘 중 하나라도 켜져 있으면 돌린다
+    /// Vision 분석이 필요한지 — 제스처 입력이거나 스켈레톤을 보고 있으면 돌린다
     private var isVisionEnabled: Bool {
-        isHandOverlayEnabled || isGestureDrawingEnabled
+        isHandOverlayEnabled || inputMode == .gesture
     }
 
     /// 토글 세대 번호. "켜짐 여부"만으로는 껐다 켠 사이에 완료된 분석을 걸러낼 수 없어
@@ -204,7 +202,7 @@ final class CaptureViewController: UIViewController {
             self.renderGestureFeedback(feedback)
             self.onTrackingDiagnostics?(feedback)
         }
-        gestureDrawing.reset(requiresRelease: isGestureDrawingEnabled)
+        gestureDrawing.reset(requiresRelease: inputMode == .gesture)
 
         // sessionQueue → 메인 액터 홉: UI 상태 갱신은 메인에서만
         cameraService.setEventHandler { [weak self] event in
@@ -330,7 +328,7 @@ final class CaptureViewController: UIViewController {
     /// 상태 머신의 의미를 결과물과 분리된 시각 피드백으로 번역한다.
     /// pinch를 놓은 `.hover`에서는 펜 본체가 즉시 사라지고 작은 위치 링만 남는다.
     private func renderGestureFeedback(_ feedback: GestureDrawingController.Feedback) {
-        guard isGestureDrawingEnabled else {
+        guard inputMode == .gesture else {
             gesturePenFeedback.update(
                 state: .hidden,
                 screenPoint: nil,
@@ -392,7 +390,7 @@ final class CaptureViewController: UIViewController {
         if isHandOverlayEnabled {
             handOverlay.update(pose: result.pose, imageSize: result.uprightImageSize)
         }
-        if isGestureDrawingEnabled {
+        if inputMode == .gesture {
             gestureDrawing.update(
                 pose: result.pose,
                 imageSize: result.uprightImageSize,

@@ -43,6 +43,39 @@ enum PenColor: CaseIterable, Identifiable {
     }
 }
 
+/// 사인 입력 방식.
+///
+/// Bool이 아닌 enum인 이유: 기본값이 규칙을 표현해야 하기 때문이다.
+/// `isGestureDrawingEnabled = false`는 "기본이 터치"라고 읽히는데,
+/// 제품 규칙은 정반대다 — 제스처가 기본이고 터치는 폴백이다 (CLAUDE.md 제품 규칙).
+/// 타입에 박아두면 나중에 읽는 사람이 이름에 의존해 추측할 일이 없다
+enum InputMode: CaseIterable {
+    /// 기본. 카메라 앞 공중 제스처
+    case gesture
+    /// 폴백. 조명 불량·인식 실패 시 사용자가 직접 전환한다 (자동 전환은 만들지 않는다)
+    case touch
+
+    /// VoiceOver용 이름 — 버튼이 아이콘뿐이라 없으면 구분 불가.
+    /// "화면에 사인"이라 하지 않는다: 사인하는 행위가 아니라 입력 방식을 가리킨다
+    var name: String {
+        switch self {
+        case .gesture: "공중에서 그리기"
+        case .touch: "손끝으로 그리기"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .gesture: "hand.draw.fill"
+        case .touch: "hand.point.up.left.fill"
+        }
+    }
+
+    var toggled: InputMode {
+        self == .gesture ? .touch : .gesture
+    }
+}
+
 /// 사인 세션 화면의 단일 진실 공급원(Single Source of Truth).
 ///
 /// 설계 근거: SwiftUI 오버레이(펜 도구)와 UIKit 캡처 코어가 같은 상태를
@@ -57,6 +90,11 @@ final class SigningSessionViewModel {
     // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄다 (2026-08-26 실기기)
     var penColor: PenColor = .red
     var penWidth: CGFloat = 8
+
+    // MARK: - 입력 방식
+
+    /// 기본값이 곧 제품 규칙이다 — 제스처가 기본, 터치는 사용자가 직접 고르는 폴백
+    var inputMode: InputMode = .gesture
 
     // MARK: - 명령 신호
     // "지우기/재시도"는 상태가 아닌 일회성 명령이라, 값 증가를 신호로 쓰는 카운터 방식 채택.
@@ -78,11 +116,6 @@ final class SigningSessionViewModel {
     // 개발자 설정 뒤로 숨긴다
 
     var isHandOverlayEnabled = false
-
-    /// 제스처 드로잉 모드 (#13). 제품의 기본 입력이며, 사용자가 버튼으로 끈 경우에만
-    /// 직접 터치 폴백으로 전환한다. Vision 성능을 근거로 앱이 자동 전환하지 않는다.
-    /// 스켈레톤과는 독립 토글 — 뼈대가 화면을 덮으면 사인 선의 품질을 볼 수 없기 때문이다.
-    var isGestureDrawingEnabled = true
 
     private(set) var isHandDetected = false
     private(set) var visionMilliseconds: Double = 0
