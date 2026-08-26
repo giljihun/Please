@@ -7,6 +7,7 @@
 
 import Vision
 import AVFoundation
+import QuartzCore
 
 /// 감지된 손의 관절 좌표 묶음.
 ///
@@ -122,7 +123,7 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
 
-        let start = CFAbsoluteTimeGetCurrent()
+        let start = CACurrentMediaTime()
 
         // 방향 보정 후 크기 — 90도 회전이므로 폭과 높이가 뒤바뀐다
         let uprightSize = CGSize(
@@ -169,7 +170,10 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         return joints.isEmpty ? nil : HandPose(joints: joints)
     }
 
-    private func elapsed(since start: CFAbsoluteTime) -> Double {
-        (CFAbsoluteTimeGetCurrent() - start) * 1000
+    /// 경과 시간(ms). 벽시계가 아니라 단조 증가 시계를 쓰는 이유:
+    /// CFAbsoluteTimeGetCurrent는 NTP 동기화나 시간 변경으로 앞뒤로 튄다.
+    /// 두 시점 사이의 간격을 재는 데는 언제나 단조 시계를 쓴다
+    private func elapsed(since start: CFTimeInterval) -> Double {
+        (CACurrentMediaTime() - start) * 1000
     }
 }
