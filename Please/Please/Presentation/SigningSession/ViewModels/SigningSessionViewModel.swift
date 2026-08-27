@@ -94,7 +94,13 @@ final class SigningSessionViewModel {
     // MARK: - 입력 방식
 
     /// 기본값이 곧 제품 규칙이다 — 제스처가 기본, 터치는 사용자가 직접 고르는 폴백
-    var inputMode: InputMode = .gesture
+    var inputMode: InputMode = .gesture {
+        didSet {
+            // 터치로 넘어갈 때 스켈레톤을 끈다. 켜둔 채로 넘어가면 Vision이 계속
+            // 도는데 화면에는 아무것도 안 보인다 — 보이지도 않는 분석에 배터리를 쓴다
+            if inputMode == .touch { isHandOverlayEnabled = false }
+        }
+    }
 
     // MARK: - 명령 신호
     // "지우기/재시도"는 상태가 아닌 일회성 명령이라, 값 증가를 신호로 쓰는 카운터 방식 채택.

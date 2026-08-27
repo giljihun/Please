@@ -19,14 +19,14 @@ struct DiagnosticsOverlay: View {
     let viewModel: SigningSessionViewModel
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            HStack(spacing: 8) {
-                if viewModel.isHandOverlayEnabled || viewModel.inputMode == .gesture {
+        // 손 추적 진단은 제스처 모드에서만 의미가 있다.
+        // 터치 폴백에서 제스처가 왜 실패했는지 보고 싶으면 모드를 되돌려 보면 된다
+        if viewModel.inputMode == .gesture {
+            VStack(alignment: .trailing, spacing: 8) {
+                HStack(spacing: 8) {
                     VisionStatsView(viewModel: viewModel)
+                    skeletonToggle
                 }
-                skeletonToggle
-            }
-            if viewModel.inputMode == .gesture {
                 TrackingLossView(viewModel: viewModel)
             }
         }
