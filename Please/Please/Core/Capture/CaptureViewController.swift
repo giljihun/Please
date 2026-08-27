@@ -183,6 +183,10 @@ final class CaptureViewController: UIViewController {
 
         canvasView.frame = view.bounds
         canvasView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // 초기 상태를 여기서 한 번 맞춘다. didSet은 '값이 바뀔 때만' 실행되므로
+        // 기본값(.gesture) 그대로 시작하면 터치 차단 코드가 한 번도 안 돌아,
+        // 제스처와 터치가 같은 캔버스에 동시에 그리게 된다
+        canvasView.isUserInteractionEnabled = inputMode != .gesture
         view.addSubview(canvasView)
 
         // 장식용 펜 피드백은 결과물인 캔버스와 진단용 스켈레톤 사이에 둔다.
