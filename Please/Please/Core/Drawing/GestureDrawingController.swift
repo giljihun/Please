@@ -193,11 +193,13 @@ final class GestureDrawingController {
 
         // 세 가지를 한 guard로 묶으면 "펜이 사라졌다"까지만 알고 원인은 알 수 없다.
         // 각각 고칠 곳이 달라서 (카메라 / 임계값 / 레이아웃) 사유를 갈라 기록한다
+        // 손이 없는 프레임도 갱신 대상이다 — guard 뒤에서 갱신하면
+        // 손이 사라진 동안 진단 화면에 직전 프레임의 신뢰도가 계속 남는다
+        lastPenTipConfidence = pose?.penTipConfidence
         guard let pose else {
             handleMissingTip(.handNotFound, at: timestamp)
             return
         }
-        lastPenTipConfidence = pose.penTipConfidence
         guard let tip = pose.penTip else {
             handleMissingTip(
                 pose.penTipConfidence == nil ? .penTipMissing : .penTipLowConfidence,
