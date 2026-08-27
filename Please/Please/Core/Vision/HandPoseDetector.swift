@@ -24,6 +24,13 @@ nonisolated struct HandPose: Sendable {
 
     let joints: [VNHumanHandPoseObservation.JointName: Joint]
 
+    /// 신뢰도 필터를 거치지 않은 검지 끝 신뢰도 (진단 전용).
+    ///
+    /// joints에서 읽으면 안 되는 이유: 수집 임계(0.3) 미만인 관절은 이미 걸러졌으므로
+    /// "모델이 검지를 못 찾았다"와 "찾았는데 0.3 미만이다"가 똑같이 nil이 된다.
+    /// 그 둘은 대응이 정반대라(카메라 vs 임계값) 원인 분류가 통째로 틀어진다
+    let rawIndexTipConfidence: Float?
+
     /// 손가락별 관절 연결 순서 (스켈레톤 선 그리기용).
     /// 손목에서 시작해 각 손가락 끝으로 뻗는 5개의 사슬
     static let fingerChains: [[VNHumanHandPoseObservation.JointName]] = [
@@ -50,6 +57,15 @@ nonisolated struct HandPose: Sendable {
         guard let index = joints[.indexTip],
               index.confidence >= Self.penTipMinimumConfidence else { return nil }
         return index.location
+    }
+
+    /// 검지 끝의 신뢰도. 모델이 검지를 아예 반환하지 않았을 때만 nil이다.
+    ///
+    /// penTip이 nil일 때 원인을 가르기 위해 필요하다.
+    /// nil이면 "모델이 검지를 못 찾았다"(카메라·조명 문제),
+    /// 값이 있는데 낮으면 "찾긴 찾았는데 확신이 없다"(임계값 문제)로 대응이 갈린다
+    var penTipConfidence: Float? {
+        rawIndexTipConfidence
     }
 
     /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
@@ -205,7 +221,11 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
                 confidence: point.confidence
             )
         }
-        return joints.isEmpty ? nil : HandPose(joints: joints)
+        return joints.isEmpty ? nil : HandPose(
+            joints: joints,
+            // 필터 전 원본에서 읽는다 — 걸러진 뒤에는 '없음'과 '낮음'을 구분할 수 없다
+            rawIndexTipConfidence: recognized[.indexTip]?.confidence
+        )
     }
 
     /// 경과 시간(ms). 벽시계가 아니라 단조 증가 시계를 쓰는 이유:
