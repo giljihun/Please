@@ -13,8 +13,8 @@
 |---|------|----------|----------|
 | 1 | 온보딩 / 권한 요청 | AVCaptureDevice.requestAccess(**카메라 + 마이크**), PHPhotoLibrary 권한 플로우 | SwiftUI |
 | 2 | 홈 (세션 시작, 모드 선택) | 단순 네비게이션 | SwiftUI |
-| 3 | 사인 세션 화면 ★핵심 | AVCaptureVideoPreviewLayer, touchesMoved + coalesced/predictedTouches 드로잉, VNDetectHumanHandPoseRequest 손 추적, AVAssetWriter 프레임 합성 녹화(**비디오 + 오디오 트랙**), 카운트다운 오버레이 | UIKit 코어 + SwiftUI 래퍼(UIViewControllerRepresentable), 펜 도구/완료 버튼 오버레이는 SwiftUI |
-| 4 | 세션 완료 / 미리보기 | AVPlayer 재생, 랜덤 한글 파일명 생성, 저장/재촬영 분기 | SwiftUI + VideoPlayer |
+| 3 | 사인 세션 화면 ★핵심 | AVCaptureVideoPreviewLayer, touchesMoved + coalesced/predictedTouches 드로잉, VNDetectHumanHandPoseRequest 손 추적, **AVCaptureMovieFileOutput 원본 녹화(영상+소리) + 획 타임라인 기록**, 카운트다운 오버레이 | UIKit 코어 + SwiftUI 래퍼(UIViewControllerRepresentable), 펜 도구/완료 버튼 오버레이는 SwiftUI |
+| 4 | 세션 완료 / 미리보기 | AVPlayer 재생 + **잉크 오버레이 재생**(합성 없음), 랜덤 한글 파일명 생성, 저장/재촬영 분기 | SwiftUI + VideoPlayer |
 | 5 | 라이브러리 (보관함) | 그리드 목록, AVAssetImageGenerator 썸네일, 메타데이터 저장 | SwiftUI(LazyVGrid) + SwiftData |
 | 6 | 영상 상세 / 재생 | 재생, 프레임 캡처, 공유 시트, AVMutableVideoComposition 워터마크 합성 | SwiftUI + AVFoundation |
 | 7 | 편집 화면 | AVAssetExportSession 트리밍, 파일명 변경 | SwiftUI + AVFoundation |
@@ -50,8 +50,9 @@ App (SwiftUI)
 
 ## 4. 기술 리스크 및 개발 우선순위
 - 공수의 절반 이상이 3번(사인 세션 화면)에 집중됨
-- 최우선 PoC: 카메라 프레임 + 드로잉 레이어 합성 녹화 (AVAssetWriter)
-- 두 번째 난이도: 6번의 워터마크 합성
+- 최우선 PoC: **원본 녹화 + 획 타임라인 기록·재현** — 합성을 내보내기로 미루면서
+  실시간 프레임 예산이라는 최대 리스크가 사라졌다. 남은 리스크는 **타임라인 동기 정확도**다
+- 두 번째 난이도: 내보내기 렌더러(잉크·펜·워터마크 합성)
 - Vision 손 추적 좌표는 스무딩(이동평균/칼만 필터) 필수 — 없으면 선이 떨림
 - iOS 전면 카메라 Vision에는 visionOS의 시스템 공간 `DragGesture`가 없으므로,
   pinch 시작·유지·해제·추적 불가를 앱 상태 머신이 직접 보장해야 함
@@ -86,13 +87,26 @@ App (SwiftUI)
     **두 트랙 모두 캡처 PTS를 그대로 써야** 립싱크가 어긋나지 않는다
   - 마커 효과음(BRIEF 3장)은 스피커로 내면 마이크에 되잡혀 울린다.
     **효과음은 오디오 트랙에 디지털로 믹스**하는 것이 원칙 — 구현은 #6 이후
-- [ ] **합성 파이프라인: Core Image(CIContext) 잠정** — PoC(#6)에서 1080p/30fps 실측 후 확정, 프레임 드랍 시 Metal 전환
+- [x] **녹화와 합성을 분리한다** (2026-08-31 개정, 이슈 #6) — 당초 "세션 중 실시간 프레임 합성"이었다
+  - **세션 중**: `AVCaptureMovieFileOutput`으로 카메라·마이크 원본만 녹화.
+    획은 화면에 그리는 동시에 **캡처 PTS와 함께 타임라인으로 기록**한다
+  - **재생·미리보기**: 원본 위에 잉크를 실시간 오버레이 — 합성하지 않으므로 즉시 뜬다
+  - **내보내기**: `AVMutableVideoComposition`으로 잉크·펜·워터마크를 한 번 렌더하고 캐시
+  - 왜 바꿨나 — 실시간 합성은 30fps에서 프레임당 **33ms** 예산이고, Vision이 이미 17ms를 쓴다.
+    남은 16ms에 합성과 인코딩을 넣어야 하는데 이게 프로젝트 최대 리스크였다.
+    합성을 미루면 **예산 제약 자체가 사라진다** — 오프라인은 프레임당 3초가 걸려도 된다
+  - 덤으로 얻는 것: 60fps 전환이 Vision과 충돌하지 않고, 펜 색·굵기를 나중에 바꿔 재렌더할 수 있고,
+    워터마크 유무 분기가 렌더 옵션 하나로 끝난다
+  - 타임라인은 **캡처 PTS에 묶어야** 정확히 재현된다 — `GestureDrawingController`가 이미 캡처 PTS를
+    상태 머신의 시간축으로 쓰고 있으므로 그대로 직렬화하면 된다
+- [ ] **내보내기 렌더러: Core Image(CIContext) 잠정** — 오프라인이라 실시간 예산 제약은 없으나,
+      30초 영상이 몇 분씩 걸리면 곤란하다. #15에서 실측 후 확정 (이슈 #4)
 
 ## 6. 개발 착수 순서 (제안)
 1. ~~Xcode 프로젝트 셋업~~ ✅
 2. ~~PoC: 전면 카메라 프리뷰 + 터치 드로잉 오버레이~~ ✅ (터치는 폴백 입력으로 유지)
 3. **PoC: Vision 제스처 입력** ← 상태 머신·펜 오버레이·임계값 실기기 확정 완료. **진입 가이드만 남음**
-4. PoC: 프리뷰+드로잉 합성 AVAssetWriter 녹화
-5. 세션 플로우 완성 (카운트다운, 완료, 파일명 생성)
-6. 라이브러리/상세/공유
-7. 편집, 워터마크 내보내기
+4. PoC: 원본 녹화 + 획 타임라인 기록·재현 (합성은 하지 않는다)
+5. 세션 플로우 완성 (시작 버튼, 카운트다운, 완료, 감사 화면, 파일명 생성)
+6. 라이브러리/상세/공유 (재생은 잉크 오버레이)
+7. 편집, 내보내기 렌더러 + 워터마크 합성
