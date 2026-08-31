@@ -13,6 +13,8 @@
 - 사인 세션 화면: UIViewControllerRepresentable로 감싼 UIKit CaptureViewController
   - 이유: AVCaptureVideoPreviewLayer, coalescedTouches/predictedTouches 기반 드로잉 품질
 - 녹화는 화면 캡처가 아니라 프레임 단위 합성(AVAssetWriter) — UI 요소는 녹화에 포함하지 않는다
+  - **유일한 예외: 제스처 펜 본체**(`drawing` 상태) — 사인하는 도구이므로 UI가 아니라 콘텐츠다
+    (2026-08-31 확정, 이슈 #13). `hover`·`uncertain`의 링은 진단용이므로 제외한다
 
 ## 제품 규칙 (변경 금지)
 - 전면 카메라 사용: 화면을 사인하는 사람 쪽으로 향하게 한다

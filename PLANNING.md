@@ -41,7 +41,7 @@ App (SwiftUI)
                ├── HandPoseDetector (Vision, latest-only 결과 전달)
                ├── GestureDrawingController (pinch 상태 머신 + 유실 사유 계측)
                ├── VisionCoordinateMapper (정규화 좌표 → 캔버스 좌표, aspectFill 보정)
-               ├── GesturePenFeedbackView (결과물에서 제외되는 입력 피드백)
+               ├── GesturePenFeedbackView (drawing의 펜 본체는 녹화 포함 / hover·uncertain 링은 제외)
                └── HandOverlayView (개발용 스켈레톤 — #9에서 제거 대상)
 ```
 
@@ -91,7 +91,7 @@ App (SwiftUI)
 ## 6. 개발 착수 순서 (제안)
 1. ~~Xcode 프로젝트 셋업~~ ✅
 2. ~~PoC: 전면 카메라 프리뷰 + 터치 드로잉 오버레이~~ ✅ (터치는 폴백 입력으로 유지)
-3. **PoC: Vision 제스처 입력** ← Apple-like 상태 머신 구현, 실기기 수치 검증 남음
+3. **PoC: Vision 제스처 입력** ← 상태 머신·펜 오버레이·임계값 실기기 확정 완료. **진입 가이드만 남음**
 4. PoC: 프리뷰+드로잉 합성 AVAssetWriter 녹화
 5. 세션 플로우 완성 (카운트다운, 완료, 파일명 생성)
 6. 라이브러리/상세/공유
