@@ -87,9 +87,11 @@ final class SigningSessionViewModel {
     // MARK: - 펜 설정 (SwiftUI 툴바 ↔ UIKit 캔버스 공유)
 
     // 실제 렌즈 사인은 굵은 마커(매직)로 이뤄지지만, 공중 제스처는 팔 전체로 쓰는
-    // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄다 (2026-08-26 실기기)
+    // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄었다 (2026-08-26 실기기).
+    // 곡선 스무딩과 반투명 잉크가 들어간 뒤 12pt로 올린다 — 각짐과 불투명함이
+    // 사라지면서 굵어도 뭉개지지 않게 됐다. 실기기에서 재조율 대상 (#18)
     var penColor: PenColor = .red
-    var penWidth: CGFloat = 8
+    var penWidth: CGFloat = 12
 
     // MARK: - 입력 방식
 
