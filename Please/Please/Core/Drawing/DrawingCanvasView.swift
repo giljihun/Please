@@ -31,15 +31,19 @@ final class DrawingCanvasView: UIView {
     // 완성 스트로크는 "그린 시점의 스타일"을 보존해야 하므로 스트로크마다
     // 개별 레이어로 고정한다 — 한 레이어에 몰면 색을 바꿀 때 이미 그린 사인까지 바뀐다
 
-    private var committedLayers: [CAShapeLayer] = []  // 손을 뗀 완성 선들 (스타일 고정)
-    private let liveLayer = CAShapeLayer()            // 현재 그리는 선 (coalesced 반영)
-    private let predictedLayer = CAShapeLayer()       // 예측 터치 미리 그리기 (지연 체감 감소)
+    private var committedLayers: [InkStrokeLayer] = []  // 손을 뗀 완성 선들 (스타일 고정)
+    private let liveLayer = InkStrokeLayer()           // 현재 그리는 선 (coalesced 반영)
+    private let predictedLayer = InkStrokeLayer()      // 예측 터치 미리 그리기 (지연 체감 감소)
 
     private var livePath = UIBezierPath()
 
     /// 획이 진행 중인지. 제스처 입력은 터치와 달리 began/ended가 시스템에서 보장되지 않아
     /// (손이 사라지면 endStroke가 여러 번 올 수 있다) 중복 호출을 여기서 막는다
     private var isStrokeActive = false
+
+    /// 곡선 스무딩의 제어점으로 쓸 직전 입력 좌표.
+    /// 경로에 실제로 찍힌 마지막 좌표(중점)와 다르므로 따로 들고 있어야 한다
+    private var lastInputPoint: CGPoint = .zero
 
     // MARK: - 초기화
 
@@ -59,23 +63,16 @@ final class DrawingCanvasView: UIView {
         isMultipleTouchEnabled = false
 
         for layer in [liveLayer, predictedLayer] {
-            configureStrokeLayer(layer)
             self.layer.addSublayer(layer)
         }
         applyStrokeStyle()
     }
 
-    private func configureStrokeLayer(_ layer: CAShapeLayer) {
-        layer.fillColor = nil
-        layer.lineCap = .round
-        layer.lineJoin = .round
-    }
-
     /// 현재 스타일은 진행 중/예측 레이어에만 적용 — 완성 레이어는 그린 시점 스타일 유지
     private func applyStrokeStyle() {
         for layer in [liveLayer, predictedLayer] {
-            layer.strokeColor = strokeColor.cgColor
-            layer.lineWidth = strokeWidth
+            layer.strokeColor = strokeColor
+            layer.strokeWidth = strokeWidth
         }
     }
 
@@ -102,13 +99,26 @@ final class DrawingCanvasView: UIView {
         endStroke()  // 이전 획이 남아 있으면 먼저 정리 (제스처 경로의 안전장치)
         livePath = UIBezierPath()
         livePath.move(to: point)
+        lastInputPoint = point
         isStrokeActive = true
     }
 
-    /// 진행 중인 획에 점 추가
+    /// 진행 중인 획에 점 추가.
+    ///
+    /// 점을 직선으로 이으면 샘플 간격만큼 각이 진다. 제스처 모드는 Vision 샘플이
+    /// 터치(coalesced 120Hz+)보다 훨씬 성겨 각짐이 특히 눈에 띈다.
+    ///
+    /// 그래서 **직전 입력점을 제어점으로 삼아 두 점의 중점까지 2차 베지에**를 긋는다.
+    /// 이렇게 이어 붙이면 곡선들이 중점에서 접선을 공유해 매끄럽게 연결된다.
+    /// 전체 경로를 다시 만들지 않으므로 획이 길어져도 비용이 늘지 않는다
     func appendPoint(_ point: CGPoint) {
         guard isStrokeActive else { return }
-        livePath.addLine(to: point)
+        let midpoint = CGPoint(
+            x: (lastInputPoint.x + point.x) / 2,
+            y: (lastInputPoint.y + point.y) / 2
+        )
+        livePath.addQuadCurve(to: midpoint, controlPoint: lastInputPoint)
+        lastInputPoint = point
         liveLayer.path = livePath.cgPath
     }
 
@@ -124,6 +134,10 @@ final class DrawingCanvasView: UIView {
         }
         guard !livePath.isEmpty else { return }
 
+        // 스무딩은 중점까지만 곡선을 긋기 때문에 마지막 입력점이 경로에 빠져 있다.
+        // 이어 주지 않으면 획 끝이 샘플 간격의 절반만큼 짧아진다
+        livePath.addLine(to: lastInputPoint)
+
         // 이동 없는 단순 탭(점 찍기): 진행 폭이 0에 가까우면 극소 길이 선분을
         // 추가해 round cap이 점으로 보이게 만든다 (사인의 온점 대응).
         // 플래그 대신 경로의 기하(bounds)로 판정 — 같은 지점 재샘플에도 안전
@@ -132,10 +146,9 @@ final class DrawingCanvasView: UIView {
             livePath.addLine(to: CGPoint(x: point.x + 0.1, y: point.y))
         }
 
-        let stroke = CAShapeLayer()
-        configureStrokeLayer(stroke)
-        stroke.strokeColor = strokeColor.cgColor  // 그린 시점의 스타일로 고정
-        stroke.lineWidth = strokeWidth
+        let stroke = InkStrokeLayer()
+        stroke.strokeColor = strokeColor  // 그린 시점의 스타일로 고정
+        stroke.strokeWidth = strokeWidth
         stroke.path = livePath.cgPath
         layer.insertSublayer(stroke, below: liveLayer)
         committedLayers.append(stroke)
@@ -155,13 +168,22 @@ final class DrawingCanvasView: UIView {
         guard let touch = touches.first else { return }
         appendCoalescedSamples(for: touch, with: event)
 
-        // 예측 구간은 매번 새로 그림 (이전 예측은 폐기 — 실제 터치가 이미 대체했음)
+        // 예측 구간은 매번 새로 그림 (이전 예측은 폐기 — 실제 터치가 이미 대체했음).
+        // 본선과 같은 스무딩을 써야 이어지는 지점에서 꺾여 보이지 않는다
         if let predicted = event?.predictedTouches(for: touch), !predicted.isEmpty {
             let predictedPath = UIBezierPath()
-            predictedPath.move(to: touch.location(in: self))
+            predictedPath.move(to: lastInputPoint)
+            var previous = lastInputPoint
             for sample in predicted {
-                predictedPath.addLine(to: sample.location(in: self))
+                let point = sample.location(in: self)
+                let midpoint = CGPoint(
+                    x: (previous.x + point.x) / 2,
+                    y: (previous.y + point.y) / 2
+                )
+                predictedPath.addQuadCurve(to: midpoint, controlPoint: previous)
+                previous = point
             }
+            predictedPath.addLine(to: previous)
             predictedLayer.path = predictedPath.cgPath
         } else {
             predictedLayer.path = nil

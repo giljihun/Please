@@ -88,11 +88,12 @@ final class HandOverlayView: UIView {
         }
     }
 
-    /// 펜 끝(검지)을 링으로 강조하고, 그립 비율을 숫자로 띄운다.
+    /// 펜 끝을 링으로 강조하고, 그립 비율을 숫자로 띄운다.
     ///
-    /// 숫자를 표시하는 이유: 그립 문턱값(0.30/0.45)은 책상에서 정할 수 없고
+    /// 숫자를 표시하는 이유: 그립 문턱값은 책상에서 정할 수 없고
     /// 실기기에서 손을 움직여 보며 맞춰야 하는 값이다. 실제 비율이 보이지 않으면
-    /// "안 그려진다"는 현상만 남고 어느 쪽으로 얼마나 조정할지 알 수 없다
+    /// "안 그려진다"는 현상만 남고 어느 쪽으로 얼마나 조정할지 알 수 없다.
+    ///
     private func drawPenTip(pose: HandPose, in context: CGContext) {
         guard let tip = pose.penTip, let point = screenPoint(tip) else { return }
 

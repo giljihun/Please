@@ -104,6 +104,10 @@ final class GestureDrawingController {
     ///
     /// 0.32(2.4cm)는 의도적으로 벌려야 닿으면서 사인 중 흔들림으로는 닿지 않는 거리다.
     /// 간격 0.12는 좌표 노이즈(±0.03)의 4배라 경계에서 상태가 뒤집히지 않는다
+    ///
+    /// ⚠️ 위 실측치(0.08/0.13)는 **두 손가락 핀치** 기준이다.
+    /// 판정이 세 손가락 최대 쌍거리로 바뀌면서 재는 대상이 달라졌으므로
+    /// 더 이상 근거가 되지 못한다 — 실기기에서 다시 재고 확정한다 (#26)
     private static let gripEnterRatio: CGFloat = 0.20
     private static let gripExitRatio: CGFloat = 0.32
 

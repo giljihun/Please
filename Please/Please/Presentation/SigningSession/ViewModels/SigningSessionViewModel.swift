@@ -87,9 +87,11 @@ final class SigningSessionViewModel {
     // MARK: - 펜 설정 (SwiftUI 툴바 ↔ UIKit 캔버스 공유)
 
     // 실제 렌즈 사인은 굵은 마커(매직)로 이뤄지지만, 공중 제스처는 팔 전체로 쓰는
-    // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄다 (2026-08-26 실기기)
+    // 동작이라 화면상 획이 짧다. 16pt는 글자가 뭉개져 8pt로 낮췄었다 (2026-08-26 실기기).
+    // 곡선 스무딩과 반투명 잉크가 들어간 뒤 12pt로 올린다 — 각짐과 불투명함이
+    // 사라지면서 굵어도 뭉개지지 않게 됐다. 실기기에서 재조율 대상 (#18)
     var penColor: PenColor = .red
-    var penWidth: CGFloat = 8
+    var penWidth: CGFloat = 12
 
     // MARK: - 입력 방식
 
@@ -140,14 +142,49 @@ final class SigningSessionViewModel {
     /// 값이 있는데 낮으면 임계값으로 회수 가능하다는 뜻이다
     private(set) var penTipConfidence: Float?
 
+    /// 그립 비율 (엄지·검지·중지 최대 쌍거리 ÷ 손 크기).
+    /// 문턱값을 실기기에서 정하려면 지금 값이 얼마인지 눈으로 봐야 한다 —
+    /// 진입·이탈 문턱은 전부 이 숫자를 재서 정한다
+    private(set) var gripRatio: CGFloat?
+
+    /// 최근 관찰 구간의 최소·최대 비율.
+    ///
+    /// 현재 값만 띄우면 실제로는 읽을 수가 없다 — 손 모양을 만드는 동안 숫자는
+    /// 계속 흔들리고, 정작 그 손이 화면을 가린다. 구간의 최소·최대를 남겨 두면
+    /// **동작을 끝내고 손을 치운 뒤에** 얼마까지 내려갔는지 확인할 수 있다.
+    /// 문턱값은 이 두 숫자 사이에서 정한다
+    private(set) var gripRatioRange: ClosedRange<CGFloat>?
+
+    /// 관찰 구간 길이. 짧으면 최소값이 금방 사라지고, 길면 이전 동작의 값이 섞인다
+    private static let ratioWindow: TimeInterval = 2.5
+    private var ratioSamples: [(value: CGFloat, at: TimeInterval)] = []
+
     func handleTrackingDiagnostics(_ feedback: GestureDrawingController.Feedback) {
         lastLossLabel = feedback.lastLoss?.shortLabel
         penTipConfidence = feedback.penTipConfidence
+        gripRatio = feedback.gripRatio
+        updateRatioRange(with: feedback.gripRatio)
         lossSummary = feedback.lossCounts
             .sorted { $0.value > $1.value }
             .prefix(3)
             .map { "\($0.key.shortLabel) \($0.value)" }
             .joined(separator: "  ")
+    }
+
+    /// 관찰 구간을 굴리며 최소·최대를 갱신한다.
+    /// 벽시계가 아닌 단조 시계를 쓴다 — 시간 간격을 재는 데 벽시계를 쓰면
+    /// 시각 보정이 들어오는 순간 구간이 뒤틀린다
+    private func updateRatioRange(with ratio: CGFloat?) {
+        let now = CACurrentMediaTime()
+        if let ratio { ratioSamples.append((ratio, now)) }
+        ratioSamples.removeAll { now - $0.at > Self.ratioWindow }
+
+        let values = ratioSamples.map(\.value)
+        guard let low = values.min(), let high = values.max() else {
+            gripRatioRange = nil
+            return
+        }
+        gripRatioRange = low...high
     }
 
     func handleHandDetection(detected: Bool, milliseconds: Double) {

@@ -68,16 +68,36 @@ nonisolated struct HandPose: Sendable {
         rawIndexTipConfidence
     }
 
-    /// 그립 비율 — 엄지 끝과 검지 끝의 거리를 손 크기로 나눈 값.
+    /// 그립 비율 — **엄지·검지·중지** 세 끝점이 얼마나 뭉쳐 있는지를 손 크기로 나눈 값.
     ///
     /// 이 값이 작으면 "펜을 쥔 상태"(그린다), 크면 "뗀 상태"(획 끝).
     /// 절대 거리 대신 비율을 쓰는 이유는 `gripScale(imageSize:)` 주석 참고
+    ///
+    /// ## 왜 두 손가락이 아니라 세 손가락인가 (2026-08-31 변경)
+    ///
+    /// 엄지·검지만 보면 **쥘 의도가 없는데도 그립으로 오판**하는 일이 잦았다.
+    /// 원인은 손가락이 실제로 붙어서가 아니라 **투영 붕괴**다 — 손이 카메라 축과
+    /// 나란해지는 순간, 3D에서 멀리 떨어진 두 점도 2D 화면에서는 거의 겹쳐 보인다.
+    ///
+    /// 점이 셋이면 이 붕괴가 훨씬 어렵다. 두 점이 시선과 일직선이 되는 자세는 흔하지만,
+    /// 세 점이 동시에 한 점으로 뭉쳐 보이는 자세는 드물다.
+    /// 게다가 엄지·검지·중지는 **실제로 마커를 쥘 때 쓰는 세 손가락**이라 은유도 맞는다.
+    ///
+    /// 세 점의 **최대 쌍거리**를 쓴다. 하나라도 떨어져 있으면 값이 커지므로
+    /// "전부 뭉쳤을 때만 쥔 것"이 된다. 평균을 쓰면 한 손가락이 벌어져도
+    /// 나머지 둘이 붙어 있어 값이 낮게 나와, 없애려던 오탐이 그대로 남는다
     func gripRatio(imageSize: CGSize) -> CGFloat? {
         guard let thumb = joints[.thumbTip],
               let index = joints[.indexTip],
+              let middle = joints[.middleTip],
               let scale = gripScale(imageSize: imageSize), scale > 0 else { return nil }
 
-        return Self.pixelDistance(thumb.location, index.location, imageSize: imageSize) / scale
+        let spread = max(
+            Self.pixelDistance(thumb.location, index.location, imageSize: imageSize),
+            Self.pixelDistance(thumb.location, middle.location, imageSize: imageSize),
+            Self.pixelDistance(index.location, middle.location, imageSize: imageSize)
+        )
+        return spread / scale
     }
 
     /// 그립 판정의 기준자 — 검지 밑동에서 검지 끝까지의 거리 (이미지 픽셀 기준).
@@ -103,6 +123,7 @@ nonisolated struct HandPose: Sendable {
     private static func pixelDistance(_ a: CGPoint, _ b: CGPoint, imageSize: CGSize) -> CGFloat {
         hypot((a.x - b.x) * imageSize.width, (a.y - b.y) * imageSize.height)
     }
+
 }
 
 /// 카메라 프레임에서 손 관절을 찾아내는 감지기.
