@@ -34,7 +34,6 @@ private struct CaptureViewRepresentable: UIViewControllerRepresentable {
         controller.canvasView.strokeWidth = viewModel.penWidth
         controller.isHandOverlayEnabled = viewModel.isHandOverlayEnabled
         controller.inputMode = viewModel.inputMode
-        controller.gripMode = viewModel.gripMode
 
         // 명령 카운터가 바뀌었을 때만 1회 실행 (일회성 명령 패턴)
         if context.coordinator.lastClearSignal != viewModel.clearSignal {

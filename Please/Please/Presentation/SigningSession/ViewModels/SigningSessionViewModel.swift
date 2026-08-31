@@ -95,16 +95,6 @@ final class SigningSessionViewModel {
 
     // MARK: - 입력 방식
 
-    /// 무엇을 "펜을 쥔 것"으로 볼지 (#26 개발용 비교).
-    /// 세 손가락과 손하트 중 어느 쪽이 실사용에서 나은지는 계산으로 알 수 없어
-    /// 실기기에서 나란히 써보고 정한다. 확정되면 하나만 남기고 이 토글은 사라진다
-    var gripMode: GripMode = .threeFinger {
-        didSet {
-            guard gripMode != oldValue else { return }
-            resetRatioRange()
-        }
-    }
-
     /// 기본값이 곧 제품 규칙이다 — 제스처가 기본, 터치는 사용자가 직접 고르는 폴백
     var inputMode: InputMode = .gesture {
         didSet {
@@ -152,8 +142,7 @@ final class SigningSessionViewModel {
     /// 값이 있는데 낮으면 임계값으로 회수 가능하다는 뜻이다
     private(set) var penTipConfidence: Float?
 
-    /// 그립 비율. **무엇을 잰 값인지는 `gripMode`에 따라 다르다** —
-    /// 세 손가락은 끝점 간 최대 거리를, 손하트는 엄지와 검지 마디 사이 거리를 잰다.
+    /// 그립 비율 (엄지·검지·중지 최대 쌍거리 ÷ 손 크기).
     /// 문턱값을 실기기에서 정하려면 지금 값이 얼마인지 눈으로 봐야 한다 —
     /// 진입·이탈 문턱은 전부 이 숫자를 재서 정한다
     private(set) var gripRatio: CGFloat?
@@ -196,14 +185,6 @@ final class SigningSessionViewModel {
             return
         }
         gripRatioRange = low...high
-    }
-
-    /// 판정 방식이 바뀌면 재는 대상 자체가 달라진다. 이전 방식의 값이 섞이면
-    /// 구간이 두 방식에 걸쳐 무의미해지므로 관찰을 비운다
-    private func resetRatioRange() {
-        ratioSamples.removeAll()
-        gripRatioRange = nil
-        gripRatio = nil
     }
 
     func handleHandDetection(detected: Bool, milliseconds: Double) {

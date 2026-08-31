@@ -139,18 +139,6 @@ final class CaptureViewController: UIViewController {
         }
     }
 
-    /// 무엇을 "펜을 쥔 것"으로 볼지. 실기기 비교용이며 확정 후 하나만 남긴다 (#26)
-    var gripMode: GripMode = .threeFinger {
-        didSet {
-            guard gripMode != oldValue else { return }
-            // 판정 기준이 바뀌면 직전 판정은 근거를 잃는다. 진행 중인 획을 끊고
-            // open 상태를 한 번 확인한 뒤 새 생명주기를 시작한다
-            gestureDrawing.gripMode = gripMode
-            handOverlay.gripMode = gripMode
-            gestureDrawing.reset(requiresRelease: true)
-        }
-    }
-
     /// 사인 입력 방식. 기본은 제스처이며 터치는 사용자가 직접 고르는 폴백이다
     var inputMode: InputMode = .gesture {
         didSet {

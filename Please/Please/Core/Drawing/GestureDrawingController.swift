@@ -105,12 +105,11 @@ final class GestureDrawingController {
     /// 0.32(2.4cm)는 의도적으로 벌려야 닿으면서 사인 중 흔들림으로는 닿지 않는 거리다.
     /// 간격 0.12는 좌표 노이즈(±0.03)의 4배라 경계에서 상태가 뒤집히지 않는다
     ///
-    /// ⚠️ **문턱값은 이제 `GripMode`가 들고 있다** (2026-08-31).
-    /// 판정 방식이 둘로 늘면서 방식마다 재는 대상이 달라졌기 때문이다 —
-    /// 세 손가락은 끝점 간 최대 거리를, 손하트는 엄지와 검지 마디 사이 거리를 잰다.
-    /// 위 실측치(0.08/0.13)는 두 손가락 핀치 기준이라 어느 쪽의 근거도 되지 못한다.
-    /// 두 방식 모두 실기기에서 다시 재고 확정한다
-    var gripMode: GripMode = .threeFinger
+    /// ⚠️ 위 실측치(0.08/0.13)는 **두 손가락 핀치** 기준이다.
+    /// 판정이 세 손가락 최대 쌍거리로 바뀌면서 재는 대상이 달라졌으므로
+    /// 더 이상 근거가 되지 못한다 — 실기기에서 다시 재고 확정한다 (#26)
+    private static let gripEnterRatio: CGFloat = 0.20
+    private static let gripExitRatio: CGFloat = 0.32
 
     /// 새 좌표 반영률. 작을수록 부드럽지만 펜이 손을 늦게 따라간다.
     private static let smoothingFactor: CGFloat = 0.4
@@ -205,12 +204,9 @@ final class GestureDrawingController {
             handleMissingTip(.handNotFound, at: timestamp)
             return
         }
-        guard let tip = pose.penTip(mode: gripMode) else {
-            // 관절이 아예 없는 것과 신뢰도 미달은 고칠 곳이 다르다.
-            // 손하트는 엄지도 쓰므로 "검지는 멀쩡한데 엄지가 없는" 경우가 생기는데,
-            // 검지 신뢰도만 보고 판단하면 그 프레임이 '검지약함'으로 잘못 분류된다
+        guard let tip = pose.penTip else {
             handleMissingTip(
-                pose.isPenTipJointMissing(mode: gripMode) ? .penTipMissing : .penTipLowConfidence,
+                pose.penTipConfidence == nil ? .penTipMissing : .penTipLowConfidence,
                 at: timestamp
             )
             return
@@ -229,7 +225,7 @@ final class GestureDrawingController {
         }
         lastSeenAt = timestamp
 
-        let ratio = heldRatio(pose.gripRatio(mode: gripMode, imageSize: imageSize), at: timestamp)
+        let ratio = heldRatio(pose.gripRatio(imageSize: imageSize), at: timestamp)
 
         if isWaitingForRelease {
             handleReleaseGate(point: point, ratio: ratio)
@@ -247,7 +243,7 @@ final class GestureDrawingController {
         }
 
         if isStrokeActive {
-            if ratio >= gripMode.exitRatio {
+            if ratio >= Self.gripExitRatio {
                 // 보류 좌표는 사용자가 이미 손을 뗀 뒤의 움직임일 수 있으므로 폐기한다.
                 finishStroke()
                 publish(.hover, point: point, ratio: ratio)
@@ -263,7 +259,7 @@ final class GestureDrawingController {
                 let confirmedPoint = appendConfirmedSamples(endingAt: point)
                 publish(.drawing, point: confirmedPoint, ratio: ratio)
             }
-        } else if ratio <= gripMode.enterRatio {
+        } else if ratio <= Self.gripEnterRatio {
             beginStroke(at: point)
             publish(.drawing, point: point, ratio: ratio)
         } else {
@@ -313,7 +309,7 @@ final class GestureDrawingController {
             return
         }
 
-        guard ratio >= gripMode.exitRatio else {
+        guard ratio >= Self.gripExitRatio else {
             // 좌표와 pinch는 읽히지만 이전 생명주기가 끝나지 않은 상태다.
             // armed 상태인 hover로 보이면 사용자가 입력 거부를 인식할 수 없다.
             publish(.uncertain, point: point, ratio: ratio)
