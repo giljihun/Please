@@ -18,6 +18,8 @@ iOS 26+ · Xcode 26 · Swift 6
 | 기본 입력은 공중 제스처 (터치는 폴백) | 화면에 닿은 손은 전면 카메라 화각 밖 — 사인하는 손이 영상에 안 담김 |
 | 제스처는 Apple식 pinch 생명주기 | 검지 끝이 펜 위치, pinch가 pen-down, release가 즉시 pen-up |
 | 녹화는 화면 캡처 ✗, 프레임 합성 | UI 요소를 결과물에서 제외해야 함 (AVAssetWriter) |
+| 녹화에 오디오 포함 | 사인해주는 순간의 목소리·현장음이 그 장면의 절반 |
+| 폰은 누가 들어도 됨 | 공중 제스처라 사인하는 사람 손이 화면에 닿을 필요가 없음 |
 | SwiftUI ↔ UIKit은 공유 `@Observable` | 양쪽이 같은 상태를 보는 문제 → 이벤트 전달이 아닌 상태 관찰 |
 | 저장은 앱 Documents + SwiftData | 랜덤 한글 이름·썸네일 등 메타데이터가 필요 |
 
@@ -28,7 +30,7 @@ iOS 26+ · Xcode 26 · Swift 6
 ```
 App/           앱 진입점
 Presentation/  화면 (SwiftUI + MVVM)
-Core/          Capture · Drawing (UIKit)
+Core/          Capture · Drawing · Vision (UIKit)
 Resources/     Assets
 ```
 

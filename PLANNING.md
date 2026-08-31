@@ -11,9 +11,9 @@
 
 | # | 화면 | 필요 기술 | 선택 기술 |
 |---|------|----------|----------|
-| 1 | 온보딩 / 권한 요청 | AVCaptureDevice.requestAccess, PHPhotoLibrary 권한 플로우 | SwiftUI |
+| 1 | 온보딩 / 권한 요청 | AVCaptureDevice.requestAccess(**카메라 + 마이크**), PHPhotoLibrary 권한 플로우 | SwiftUI |
 | 2 | 홈 (세션 시작, 모드 선택) | 단순 네비게이션 | SwiftUI |
-| 3 | 사인 세션 화면 ★핵심 | AVCaptureVideoPreviewLayer, touchesMoved + coalesced/predictedTouches 드로잉, VNDetectHumanHandPoseRequest 손 추적, AVAssetWriter 프레임 합성 녹화, 카운트다운 오버레이 | UIKit 코어 + SwiftUI 래퍼(UIViewControllerRepresentable), 펜 도구/완료 버튼 오버레이는 SwiftUI |
+| 3 | 사인 세션 화면 ★핵심 | AVCaptureVideoPreviewLayer, touchesMoved + coalesced/predictedTouches 드로잉, VNDetectHumanHandPoseRequest 손 추적, AVAssetWriter 프레임 합성 녹화(**비디오 + 오디오 트랙**), 카운트다운 오버레이 | UIKit 코어 + SwiftUI 래퍼(UIViewControllerRepresentable), 펜 도구/완료 버튼 오버레이는 SwiftUI |
 | 4 | 세션 완료 / 미리보기 | AVPlayer 재생, 랜덤 한글 파일명 생성, 저장/재촬영 분기 | SwiftUI + VideoPlayer |
 | 5 | 라이브러리 (보관함) | 그리드 목록, AVAssetImageGenerator 썸네일, 메타데이터 저장 | SwiftUI(LazyVGrid) + SwiftData |
 | 6 | 영상 상세 / 재생 | 재생, 프레임 캡처, 공유 시트, AVMutableVideoComposition 워터마크 합성 | SwiftUI + AVFoundation |
@@ -35,13 +35,18 @@ App (SwiftUI)
 └── SigningSessionView (SwiftUI 래퍼)
      └── UIViewControllerRepresentable
           └── CaptureViewController (UIKit)
+               ├── CameraService (세션 구성·수명주기, 인터럽션 이벤트)
                ├── AVCaptureVideoPreviewLayer (전면 카메라)
-               ├── DrawingCanvasView (custom UIView)
+               ├── DrawingCanvasView (custom UIView) — 결과물이 되는 유일한 레이어
                ├── HandPoseDetector (Vision, latest-only 결과 전달)
-               ├── GestureDrawingController (pinch 상태 머신)
+               ├── GestureDrawingController (pinch 상태 머신 + 유실 사유 계측)
+               ├── VisionCoordinateMapper (정규화 좌표 → 캔버스 좌표, aspectFill 보정)
                ├── GesturePenFeedbackView (결과물에서 제외되는 입력 피드백)
-               └── Vision 좌표 → 캔버스 브릿지
+               └── HandOverlayView (개발용 스켈레톤 — #9에서 제거 대상)
 ```
+
+- 입력 소스(터치 / Vision 제스처)가 무엇이든 **캔버스는 "점 시퀀스"만 받는다.**
+  새 입력 방식이 붙어도 캔버스와 녹화 경로는 바뀌지 않는다 (5장 드로잉 엔진 결정 참고)
 
 ## 4. 기술 리스크 및 개발 우선순위
 - 공수의 절반 이상이 3번(사인 세션 화면)에 집중됨
@@ -63,11 +68,24 @@ App (SwiftUI)
 - [x] **제스처 입력: Apple 공간 드로잉과 같은 pinch 생명주기** (2026-08-26 확정, 이슈 #23)
   - 검지 끝은 펜 위치, pinch는 `pen-down`, release는 즉시 `pen-up`으로 처리
   - 상태를 `hidden / hover / drawing / uncertain`으로 분리하고, 펜 본체는 `drawing` 중에만 표시
-  - pinch 판정이 불가능한 좌표는 최대 100ms/6개만 보류. pinch가 재확인되면 확정하고 release·timeout이면 폐기
-  - clear·모드 전환·카메라 중단·긴 추적 유실 뒤에는 open 상태를 한 번 확인해야 다음 획을 시작
+  - pinch 판정이 불가능한 좌표는 최대 300ms/20개만 보류. pinch가 재확인되면 확정하고 release·timeout이면 폐기
+    - 당초 100ms/6개였으나 2026-08-26 실기기 계측에서 **보류 초과가 지배적 유실 사유**로 나와 완화 (이슈 #26)
+  - **timeout은 입력을 잠그지 않는다** (2026-08-26 개정, 이슈 #26)
+    - 당초 "긴 추적 유실 뒤에는 open 상태를 한 번 확인해야 다음 획을 시작"이었다. 그러나 엄지는 쥐면
+      검지 뒤로 숨으므로 **판정 불가는 예외가 아니라 상시 상태**이고, 그때마다 입력이 잠겨
+      "쥐고 있는데 안 그려지는" 현상이 됐다
+    - 추적이 흔들린 것과 사용자가 손을 뗀 것은 다르다 — **획은 끊되 입력은 계속 받는다**
+    - release gate는 생명주기 경계(모드 전환, 캔버스 지우기, 타임스탬프 이상)에만 건다
   - 캡처 PTS를 상태 머신의 시간축으로 쓰고, 메인 액터 대기열에는 최신 Vision 결과 하나만 유지
   - Apple 샘플은 시스템 `DragGesture`가 획 생명주기를, ARKit 손 앵커가 3D 위치를 제공한다. 이 앱은 전면 카메라 Vision만 쓰므로 같은 사용자 모델을 명시적 상태 머신으로 재현
   - 참고: [Apple — Creating a painting space in visionOS](https://developer.apple.com/documentation/visionos/creating-a-painting-space-in-visionos)
+- [x] **녹화에 오디오를 포함한다** (2026-08-31 확정)
+  - 사인해주는 순간의 목소리·현장음이 그 장면의 절반이다. 앱 이름의 유래부터가 소리의 순간이다
+  - `AVCaptureAudioDataOutput`을 세션에 추가하고, AVAssetWriter에 오디오 입력을 하나 더 붙인다
+  - 비디오는 합성이 필요해 지연이 생기고 오디오는 그대로 흘러간다 —
+    **두 트랙 모두 캡처 PTS를 그대로 써야** 립싱크가 어긋나지 않는다
+  - 마커 효과음(BRIEF 3장)은 스피커로 내면 마이크에 되잡혀 울린다.
+    **효과음은 오디오 트랙에 디지털로 믹스**하는 것이 원칙 — 구현은 #6 이후
 - [ ] **합성 파이프라인: Core Image(CIContext) 잠정** — PoC(#6)에서 1080p/30fps 실측 후 확정, 프레임 드랍 시 Metal 전환
 
 ## 6. 개발 착수 순서 (제안)
