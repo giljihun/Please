@@ -104,8 +104,15 @@ final class GestureDrawingController {
     ///
     /// 0.32(2.4cm)는 의도적으로 벌려야 닿으면서 사인 중 흔들림으로는 닿지 않는 거리다.
     /// 간격 0.12는 좌표 노이즈(±0.03)의 4배라 경계에서 상태가 뒤집히지 않는다
-    private static let gripEnterRatio: CGFloat = 0.20
-    private static let gripExitRatio: CGFloat = 0.32
+    ///
+    /// ⚠️ **아래 값은 잠정치다** (2026-08-31). 그립 판정이 두 손가락에서
+    /// **세 손가락 최대 쌍거리**로 바뀌면서 측정 대상 자체가 달라졌다.
+    /// 세 점이 다 붙어도 엄지↔중지는 엄지↔검지보다 멀기 때문에 같은 자세에서
+    /// 값이 더 크게 나온다. 위 실측치(0.08/0.13)는 두 손가락 기준이라 더 이상
+    /// 근거가 되지 못한다 — 실기기에서 다시 재고 확정한다.
+    /// 진입:이탈 비율(1.6배)만 유지해 이력현상의 여유는 같게 뒀다
+    private static let gripEnterRatio: CGFloat = 0.30
+    private static let gripExitRatio: CGFloat = 0.48
 
     /// 새 좌표 반영률. 작을수록 부드럽지만 펜이 손을 늦게 따라간다.
     private static let smoothingFactor: CGFloat = 0.4

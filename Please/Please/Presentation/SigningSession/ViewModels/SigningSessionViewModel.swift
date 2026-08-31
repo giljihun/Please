@@ -142,9 +142,15 @@ final class SigningSessionViewModel {
     /// 값이 있는데 낮으면 임계값으로 회수 가능하다는 뜻이다
     private(set) var penTipConfidence: Float?
 
+    /// 그립 비율 (엄지·검지·중지 최대 쌍거리 ÷ 손 크기).
+    /// 문턱값을 실기기에서 정하려면 지금 값이 얼마인지 눈으로 봐야 한다 —
+    /// 진입·이탈 문턱은 전부 이 숫자를 재서 정했다
+    private(set) var gripRatio: CGFloat?
+
     func handleTrackingDiagnostics(_ feedback: GestureDrawingController.Feedback) {
         lastLossLabel = feedback.lastLoss?.shortLabel
         penTipConfidence = feedback.penTipConfidence
+        gripRatio = feedback.gripRatio
         lossSummary = feedback.lossCounts
             .sorted { $0.value > $1.value }
             .prefix(3)

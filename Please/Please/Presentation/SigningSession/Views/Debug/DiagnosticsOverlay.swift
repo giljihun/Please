@@ -88,6 +88,15 @@ private struct TrackingLossView: View {
                         .foregroundStyle(.red.opacity(0.9))
                 }
             }
+            // 문턱값은 전부 이 숫자를 실기기에서 재서 정했다.
+            // 판정 방식이 바뀌면 값의 범위도 바뀌므로 다시 보여줘야 한다
+            if let ratio = viewModel.gripRatio {
+                Text("그립 \(ratio, specifier: "%.2f")")
+                    .foregroundStyle(.cyan)
+            } else {
+                Text("그립 —")
+                    .foregroundStyle(.red.opacity(0.9))
+            }
             if !viewModel.lossSummary.isEmpty {
                 Text(viewModel.lossSummary)
                     .foregroundStyle(.white.opacity(0.7))
