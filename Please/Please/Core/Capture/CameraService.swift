@@ -168,7 +168,20 @@ nonisolated final class CameraService: @unchecked Sendable {
             session.commitConfiguration()
         }
 
-        session.sessionPreset = .high
+        // 프리셋이 아니라 포맷을 직접 고른다.
+        //
+        // `.high`는 전면 카메라에서 16:9(1920×1080)를 준다. 그런데 화면은 약 9:19.5라
+        // aspectFill이 **좌우를 잘라낸다** — Vision이 화면 밖으로 보는 여유가
+        // 한쪽 11%밖에 안 됐다. 손을 옆으로 뻗으면 그립 판정에 필요한 관절이
+        // 먼저 프레임을 벗어나 판정이 통째로 불가능해진다 (2026-08-31 실기기, #26).
+        //
+        // 4:3 포맷은 같은 화면에 대해 좌우 여유를 세 배 가까이 늘린다.
+        // 프리뷰는 지금처럼 잘라서 보여주므로 **사용자가 보는 화면은 그대로이고
+        // 인식 범위만 넓어진다.**
+        //
+        // 녹화(#6)에도 유리하다 — 넓게 담아 두고 내보낼 때 잘라내면 되기 때문이다.
+        // 합성을 내보내기 시점으로 미룬 구조라 원본은 넓을수록 좋다
+        session.sessionPreset = .inputPriority
 
         guard let device = AVCaptureDevice.default(
             .builtInWideAngleCamera, for: .video, position: .front
@@ -206,19 +219,30 @@ nonisolated final class CameraService: @unchecked Sendable {
         // 지원 범위 검증: 미지원 프레임 간격 대입은 Swift do/catch로 잡을 수 없는
         // ObjC 예외로 즉사한다. iOS 26 기기(iPhone 11+)의 기본 포맷은 전부 30fps를
         // 지원하므로 지금은 이론적 방어지만, #6에서 포맷을 직접 고르면 실효적이 된다
-        let supports30fps = device.activeFormat.videoSupportedFrameRateRanges.contains {
-            ($0.minFrameRate...$0.maxFrameRate).contains(30)
-        }
-        if supports30fps {
-            do {
-                try device.lockForConfiguration()
-                defer { device.unlockForConfiguration() }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+
+            // 넓은 화각의 4:3 포맷으로 교체. 못 찾으면 세션이 고른 포맷을 그대로 쓴다 —
+            // 화각이 좁아질 뿐 동작은 하므로 실패로 취급하지 않는다
+            if let format = Self.preferredWideFormat(for: device) {
+                device.activeFormat = format
+            }
+
+            // 반드시 activeFormat 이후에 설정 — 포맷을 바꾸면 frame duration이
+            // 그 포맷의 기본값으로 초기화되므로, 먼저 설정하면 조용히 덮어써진다.
+            // 지원 범위 검증: 미지원 프레임 간격 대입은 Swift do/catch로 잡을 수 없는
+            // ObjC 예외로 즉사한다
+            let supports30fps = device.activeFormat.videoSupportedFrameRateRanges.contains {
+                ($0.minFrameRate...$0.maxFrameRate).contains(30)
+            }
+            if supports30fps {
                 device.activeVideoMinFrameDuration = Self.targetFrameDuration
                 device.activeVideoMaxFrameDuration = Self.targetFrameDuration
-            } catch {
-                session.removeInput(input)
-                throw CameraServiceError.configurationFailed
             }
+        } catch {
+            session.removeInput(input)
+            throw CameraServiceError.configurationFailed
         }
 
         registerSessionObservers()
@@ -227,6 +251,40 @@ nonisolated final class CameraService: @unchecked Sendable {
 
     /// 목표 프레임 간격 (30fps)
     private static let targetFrameDuration = CMTime(value: 1, timescale: 30)
+
+    /// 손 추적에 쓸 넓은 화각 포맷을 고른다.
+    ///
+    /// 고르는 기준이 "가장 고화질"이 아닌 이유:
+    /// - **4:3에 가까울수록** 좋다. 세로 화면은 좌우가 잘리므로 가로 여유가 곧 인식 범위다
+    /// - **너무 크면 안 된다.** Vision 처리 시간은 픽셀 수에 비례하는데 이미 프레임 예산의
+    ///   절반(17ms/33ms)을 쓰고 있다. 1080 안팎이면 인식에 충분하다
+    /// - 30fps를 지원해야 한다 — 고정 프레임레이트가 녹화 타임라인의 전제다 (#6)
+    private static func preferredWideFormat(for device: AVCaptureDevice) -> AVCaptureDevice.Format? {
+        /// 세로 길이 상한. 이보다 크면 화질보다 Vision 부하가 먼저 문제가 된다
+        let maximumHeight: Int32 = 1200
+        /// 4:3(1.333)로 인정할 범위. 기기마다 미세하게 다른 값을 쓴다
+        let targetAspectRatio: Double = 4.0 / 3.0
+        let aspectTolerance: Double = 0.05
+
+        return device.formats
+            .filter { format in
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                guard dimensions.height <= maximumHeight, dimensions.height > 0 else { return false }
+
+                let ratio = Double(dimensions.width) / Double(dimensions.height)
+                guard abs(ratio - targetAspectRatio) <= aspectTolerance else { return false }
+
+                return format.videoSupportedFrameRateRanges.contains {
+                    ($0.minFrameRate...$0.maxFrameRate).contains(30)
+                }
+            }
+            // 조건을 만족하는 것 중에서는 가장 큰 것 — 상한 안에서는 해상도가 높을수록
+            // 관절 위치가 정확하다
+            .max { lhs, rhs in
+                CMVideoFormatDescriptionGetDimensions(lhs.formatDescription).height
+                    < CMVideoFormatDescriptionGetDimensions(rhs.formatDescription).height
+            }
+    }
 
     /// 구성 실패 롤백. beginConfiguration 블록 안에서만 호출할 것
     private func removeAllInputsAndOutputs() {
