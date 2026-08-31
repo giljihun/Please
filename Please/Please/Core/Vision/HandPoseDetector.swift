@@ -100,6 +100,35 @@ nonisolated struct HandPose: Sendable {
         return spread / scale
     }
 
+    /// 손하트 비율 — 엄지 끝이 **검지의 중간 마디를 가로지르는 정도**.
+    ///
+    /// 값이 작으면 손하트(그린다), 크면 아님. `gripRatio`와 부호 방향을 맞춰
+    /// 판정 로직이 두 방식을 같은 코드로 다룰 수 있게 했다.
+    ///
+    /// ## 왜 "거리"가 아니라 "가로지름"인가
+    ///
+    /// 손하트와 핀치는 **엄지가 검지의 어디에 닿는가**로 갈린다.
+    /// 핀치는 엄지 끝이 **검지 끝**에 붙고, 손하트는 엄지가 검지를 가로질러
+    /// **중간 마디**에 닿는다. 그래서 엄지 끝과 검지 PIP~DIP 선분 사이의 거리를 잰다.
+    ///
+    /// 점이 아니라 **선분까지의 거리**를 쓰는 이유: 사람마다, 순간마다 가로지르는
+    /// 높이가 다르다. 특정 관절 하나를 기준으로 잡으면 조금만 위아래로 어긋나도
+    /// 값이 튄다. 선분에 내린 수선을 쓰면 어디서 교차하든 같은 값이 나온다.
+    ///
+    /// 좌우 손을 가릴 필요가 없다는 것도 장점이다. "어느 쪽으로 넘어갔는가"를
+    /// 외적 부호로 판정하면 왼손·오른손과 전면 카메라 미러링까지 따져야 하는데,
+    /// 거리로 재면 그 분기가 통째로 사라진다
+    func heartRatio(imageSize: CGSize) -> CGFloat? {
+        guard let thumb = joints[.thumbTip],
+              let pip = joints[.indexPIP],
+              let dip = joints[.indexDIP],
+              let scale = gripScale(imageSize: imageSize), scale > 0 else { return nil }
+
+        return Self.pixelDistanceToSegment(
+            thumb.location, from: pip.location, to: dip.location, imageSize: imageSize
+        ) / scale
+    }
+
     /// 그립 판정의 기준자 — 검지 밑동에서 검지 끝까지의 거리 (이미지 픽셀 기준).
     ///
     /// 절대 거리를 쓰면 손이 멀어질 때 오작동한다 (손 전체가 작아지므로 손을 펴도
@@ -122,6 +151,86 @@ nonisolated struct HandPose: Sendable {
     /// 손을 기울이는 것만으로 그립 문턱을 넘나든다. 픽셀로 되돌린 뒤 잰다
     private static func pixelDistance(_ a: CGPoint, _ b: CGPoint, imageSize: CGSize) -> CGFloat {
         hypot((a.x - b.x) * imageSize.width, (a.y - b.y) * imageSize.height)
+    }
+
+    /// 점에서 선분까지의 최단 거리 (픽셀). 정규화 좌표를 쓰면 안 되는 이유는 위와 같다
+    private static func pixelDistanceToSegment(
+        _ point: CGPoint,
+        from start: CGPoint,
+        to end: CGPoint,
+        imageSize: CGSize
+    ) -> CGFloat {
+        let p = CGPoint(x: point.x * imageSize.width, y: point.y * imageSize.height)
+        let a = CGPoint(x: start.x * imageSize.width, y: start.y * imageSize.height)
+        let b = CGPoint(x: end.x * imageSize.width, y: end.y * imageSize.height)
+
+        let segment = CGPoint(x: b.x - a.x, y: b.y - a.y)
+        let lengthSquared = segment.x * segment.x + segment.y * segment.y
+        // 두 관절이 겹쳐 보이면 선분이 사라진다 — 점까지의 거리로 물러난다
+        guard lengthSquared > 0 else { return hypot(p.x - a.x, p.y - a.y) }
+
+        // 수선의 발이 선분 위 어디인지를 0~1로 자른다.
+        // 자르지 않으면 선분을 무한 직선으로 취급해, 엄지가 마디 바깥에 있어도
+        // 가깝다고 나온다
+        let projection = ((p.x - a.x) * segment.x + (p.y - a.y) * segment.y) / lengthSquared
+        let t = max(0, min(1, projection))
+        let closest = CGPoint(x: a.x + segment.x * t, y: a.y + segment.y * t)
+        return hypot(p.x - closest.x, p.y - closest.y)
+    }
+}
+
+/// 무엇을 "펜을 쥔 것"으로 볼 것인가.
+///
+/// 두 방식은 문턱값만 다른 게 아니라 **재는 대상 자체가 다르다.**
+/// 어느 쪽이 실사용에서 나은지는 계산으로 알 수 없어 실기기에서 나란히 비교한다
+enum GripMode: CaseIterable {
+    /// 엄지·검지·중지를 모은다. 실제 마커를 쥐는 손 모양
+    case threeFinger
+    /// 손하트 — 엄지가 검지를 가로지른다. K-pop 팬 문화의 손 모양
+    case heart
+
+    var name: String {
+        switch self {
+        case .threeFinger: "세 손가락"
+        case .heart: "손하트"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .threeFinger: "hand.pinch"
+        case .heart: "hand.wave"
+        }
+    }
+
+    /// ⚠️ 잠정치 — 두 방식 모두 실기기 측정 전이다.
+    /// 진입:이탈 비율 1.6배만 맞춰 이력현상의 여유를 같게 뒀다
+    var enterRatio: CGFloat {
+        switch self {
+        case .threeFinger: 0.30
+        case .heart: 0.22
+        }
+    }
+
+    var exitRatio: CGFloat {
+        switch self {
+        case .threeFinger: 0.48
+        case .heart: 0.36
+        }
+    }
+
+    var toggled: GripMode {
+        self == .threeFinger ? .heart : .threeFinger
+    }
+}
+
+extension HandPose {
+    /// 판정 방식에 맞는 비율. 두 방식 모두 "작으면 쥔 것"으로 부호를 맞춰 뒀다
+    func gripRatio(mode: GripMode, imageSize: CGSize) -> CGFloat? {
+        switch mode {
+        case .threeFinger: gripRatio(imageSize: imageSize)
+        case .heart: heartRatio(imageSize: imageSize)
+        }
     }
 }
 

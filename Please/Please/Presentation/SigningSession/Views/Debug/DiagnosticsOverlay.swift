@@ -25,11 +25,29 @@ struct DiagnosticsOverlay: View {
             VStack(alignment: .trailing, spacing: 8) {
                 HStack(spacing: 8) {
                     VisionStatsView(viewModel: viewModel)
+                    gripModeToggle
                     skeletonToggle
                 }
                 TrackingLossView(viewModel: viewModel)
             }
         }
+    }
+
+    /// 그립 판정 방식 전환 (#26 비교용).
+    ///
+    /// 세 손가락과 손하트 중 어느 쪽이 나은지는 계산으로 알 수 없다 —
+    /// 같은 손으로 번갈아 써봐야 안다. 확정되면 하나만 남기고 이 버튼은 사라진다
+    private var gripModeToggle: some View {
+        Button {
+            viewModel.gripMode = viewModel.gripMode.toggled
+        } label: {
+            Image(systemName: viewModel.gripMode.symbolName)
+                .font(.title3)
+                .foregroundStyle(viewModel.gripMode == .heart ? .pink : .white)
+                .padding(10)
+        }
+        .glassEffect()
+        .accessibilityLabel("그립 판정 방식: \(viewModel.gripMode.name)")
     }
 
     /// 스켈레톤은 켜고 끌 수 있어야 한다 — 뼈대가 화면을 덮으면 정작 사인 선의
@@ -88,14 +106,20 @@ private struct TrackingLossView: View {
                         .foregroundStyle(.red.opacity(0.9))
                 }
             }
-            // 문턱값은 전부 이 숫자를 실기기에서 재서 정했다.
-            // 판정 방식이 바뀌면 값의 범위도 바뀌므로 다시 보여줘야 한다
-            if let ratio = viewModel.gripRatio {
-                Text("그립 \(ratio, specifier: "%.2f")")
-                    .foregroundStyle(.cyan)
-            } else {
-                Text("그립 —")
-                    .foregroundStyle(.red.opacity(0.9))
+            // 문턱값은 전부 이 숫자를 실기기에서 재서 정한다.
+            // 방식마다 재는 대상이 달라 값의 범위도 다르므로 방식 이름을 함께 보여준다
+            HStack(spacing: 6) {
+                Text(viewModel.gripMode.name)
+                    .foregroundStyle(viewModel.gripMode == .heart ? .pink : .white.opacity(0.7))
+                if let ratio = viewModel.gripRatio {
+                    Text("\(ratio, specifier: "%.2f")")
+                        .foregroundStyle(.cyan)
+                } else {
+                    Text("—")
+                        .foregroundStyle(.red.opacity(0.9))
+                }
+                Text("(\(viewModel.gripMode.enterRatio, specifier: "%.2f")/\(viewModel.gripMode.exitRatio, specifier: "%.2f"))")
+                    .foregroundStyle(.white.opacity(0.45))
             }
             if !viewModel.lossSummary.isEmpty {
                 Text(viewModel.lossSummary)
