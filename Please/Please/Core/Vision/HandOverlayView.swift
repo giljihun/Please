@@ -21,6 +21,14 @@ final class HandOverlayView: UIView {
     /// 감지에 쓰인 정립 이미지 크기 — aspectFill 크롭 계산의 기준
     private var imageSize: CGSize = .zero
 
+    /// 현재 판정 방식. 스켈레톤이 강조하는 지점과 숫자가 실제 판정과 같아야 한다
+    var gripMode: GripMode = .threeFinger {
+        didSet {
+            guard gripMode != oldValue else { return }
+            setNeedsDisplay()
+        }
+    }
+
     /// 표시할 포즈 갱신. nil이면 오버레이를 비운다
     func update(pose: HandPose?, imageSize: CGSize) {
         self.pose = pose
@@ -88,13 +96,16 @@ final class HandOverlayView: UIView {
         }
     }
 
-    /// 펜 끝(검지)을 링으로 강조하고, 그립 비율을 숫자로 띄운다.
+    /// 펜 끝을 링으로 강조하고, 그립 비율을 숫자로 띄운다.
     ///
-    /// 숫자를 표시하는 이유: 그립 문턱값(0.30/0.45)은 책상에서 정할 수 없고
+    /// 숫자를 표시하는 이유: 그립 문턱값은 책상에서 정할 수 없고
     /// 실기기에서 손을 움직여 보며 맞춰야 하는 값이다. 실제 비율이 보이지 않으면
-    /// "안 그려진다"는 현상만 남고 어느 쪽으로 얼마나 조정할지 알 수 없다
+    /// "안 그려진다"는 현상만 남고 어느 쪽으로 얼마나 조정할지 알 수 없다.
+    ///
+    /// 판정 방식을 함께 받는 이유: 펜 끝도 비율도 방식마다 다른 것을 가리킨다.
+    /// 스켈레톤이 실제 판정과 다른 지점을 강조하면 진단 도구가 오히려 사람을 속인다
     private func drawPenTip(pose: HandPose, in context: CGContext) {
-        guard let tip = pose.penTip, let point = screenPoint(tip) else { return }
+        guard let tip = pose.penTip(mode: gripMode), let point = screenPoint(tip) else { return }
 
         context.setStrokeColor(UIColor.systemRed.cgColor)
         context.setLineWidth(3)
@@ -104,7 +115,7 @@ final class HandOverlayView: UIView {
             width: radius * 2, height: radius * 2
         ))
 
-        guard let ratio = pose.gripRatio(imageSize: imageSize) else { return }
+        guard let ratio = pose.gripRatio(mode: gripMode, imageSize: imageSize) else { return }
         let text = String(format: "%.2f", ratio) as NSString
         let attributes: [NSAttributedString.Key: Any] = [
             .font: UIFont.monospacedDigitSystemFont(ofSize: 13, weight: .semibold),

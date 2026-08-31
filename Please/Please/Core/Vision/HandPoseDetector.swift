@@ -31,6 +31,10 @@ nonisolated struct HandPose: Sendable {
     /// 그 둘은 대응이 정반대라(카메라 vs 임계값) 원인 분류가 통째로 틀어진다
     let rawIndexTipConfidence: Float?
 
+    /// 필터를 거치지 않은 엄지 끝 신뢰도 (진단 전용).
+    /// 손하트 모드는 펜 끝 계산에 엄지도 쓰므로 같은 구분이 필요하다
+    let rawThumbTipConfidence: Float?
+
     /// 손가락별 관절 연결 순서 (스켈레톤 선 그리기용).
     /// 손목에서 시작해 각 손가락 끝으로 뻗는 5개의 사슬
     static let fingerChains: [[VNHumanHandPoseObservation.JointName]] = [
@@ -47,16 +51,48 @@ nonisolated struct HandPose: Sendable {
     /// 정밀도가 필요한 곳과 아닌 곳에 같은 잣대를 쓸 이유가 없다
     private static let penTipMinimumConfidence: Float = 0.5
 
-    /// 펜 끝으로 삼을 지점 — 검지 끝.
+    /// 펜 끝으로 삼을 지점. **무엇을 펜 끝으로 볼지는 판정 방식에 따라 다르다.**
+    ///
+    /// ## 세 손가락 — 검지 끝
     ///
     /// 엄지·검지의 중점을 쓰지 않는 이유: 획을 끊으려 엄지를 벌리는 순간 중점이
     /// 함께 밀려나 "떼는 동작 자체가 펜 끝을 움직인다" (획 끝에 꼬리가 붙음).
     /// 검지만 쓰면 엄지가 어떻게 움직이든 펜 끝은 제자리다 —
     /// 실제 펜도 검지가 방향을 잡고 엄지는 쥐었다 놨다 하는 역할만 한다
-    var penTip: CGPoint? {
+    ///
+    /// ## 손하트 — 엄지 끝과 검지 끝의 중점
+    ///
+    /// 손하트는 두 손끝이 **하트의 두 봉우리**를 이루고 교차점이 아래 꼭짓점이 된다.
+    /// 사람이 "여기 하트가 있다"고 느끼는 자리는 그 사이 한가운데지 검지 끝이 아니다.
+    /// 검지 끝을 쓰면 펜이 하트 옆구리에 붙어 어긋나 보인다.
+    ///
+    /// 위에 적은 "중점을 쓰면 떼는 동작이 펜을 움직인다"는 단점은 여기선 문제가 안 된다.
+    /// 손하트는 **손 모양 전체를 풀어서** 끝내는 동작이라, 두 손끝이 함께 벌어지므로
+    /// 중점이 한쪽으로 끌려가지 않는다
+    func penTip(mode: GripMode) -> CGPoint? {
         guard let index = joints[.indexTip],
               index.confidence >= Self.penTipMinimumConfidence else { return nil }
-        return index.location
+
+        switch mode {
+        case .threeFinger:
+            return index.location
+        case .heart:
+            guard let thumb = joints[.thumbTip],
+                  thumb.confidence >= Self.penTipMinimumConfidence else { return nil }
+            return CGPoint(
+                x: (thumb.location.x + index.location.x) / 2,
+                y: (thumb.location.y + index.location.y) / 2
+            )
+        }
+    }
+
+    /// 펜 끝 계산에 필요한 관절이 **아예 없는지**. 신뢰도 미달과 구분해야 한다 —
+    /// 없으면 카메라·조명 문제이고, 낮으면 임계값으로 회수 가능하다 (#26 계측)
+    func isPenTipJointMissing(mode: GripMode) -> Bool {
+        switch mode {
+        case .threeFinger: rawIndexTipConfidence == nil
+        case .heart: rawIndexTipConfidence == nil || rawThumbTipConfidence == nil
+        }
     }
 
     /// 검지 끝의 신뢰도. 모델이 검지를 아예 반환하지 않았을 때만 nil이다.
@@ -204,18 +240,24 @@ enum GripMode: CaseIterable {
     }
 
     /// ⚠️ 잠정치 — 두 방식 모두 실기기 측정 전이다.
-    /// 진입:이탈 비율 1.6배만 맞춰 이력현상의 여유를 같게 뒀다
+    /// 진입:이탈 비율 1.6배만 맞춰 이력현상의 여유를 같게 뒀다.
+    ///
+    /// 2026-08-31 1차 실사용에서 **두 방식 다 너무 쉽게 켜졌다**는 피드백에 따라
+    /// 진입을 조였다 (세 손가락 0.30→0.20, 손하트 0.22→0.12).
+    /// 이탈도 함께 내린 이유: 진입만 조이면 두 값의 간격이 벌어져
+    /// **떼기가 어려워진다.** 그러면 "이동 중에도 획이 계속 그려지는" 문제가
+    /// 되살아난다 — 0.45에서 겪었던 그 문제다 (GestureDrawingController 주석 참고)
     var enterRatio: CGFloat {
         switch self {
-        case .threeFinger: 0.30
-        case .heart: 0.22
+        case .threeFinger: 0.20
+        case .heart: 0.12
         }
     }
 
     var exitRatio: CGFloat {
         switch self {
-        case .threeFinger: 0.48
-        case .heart: 0.36
+        case .threeFinger: 0.32
+        case .heart: 0.20
         }
     }
 
@@ -353,7 +395,8 @@ nonisolated final class HandPoseDetector: @unchecked Sendable {
         return joints.isEmpty ? nil : HandPose(
             joints: joints,
             // 필터 전 원본에서 읽는다 — 걸러진 뒤에는 '없음'과 '낮음'을 구분할 수 없다
-            rawIndexTipConfidence: recognized[.indexTip]?.confidence
+            rawIndexTipConfidence: recognized[.indexTip]?.confidence,
+            rawThumbTipConfidence: recognized[.thumbTip]?.confidence
         )
     }
 

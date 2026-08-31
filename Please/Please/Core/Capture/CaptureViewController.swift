@@ -146,6 +146,7 @@ final class CaptureViewController: UIViewController {
             // 판정 기준이 바뀌면 직전 판정은 근거를 잃는다. 진행 중인 획을 끊고
             // open 상태를 한 번 확인한 뒤 새 생명주기를 시작한다
             gestureDrawing.gripMode = gripMode
+            handOverlay.gripMode = gripMode
             gestureDrawing.reset(requiresRelease: true)
         }
     }

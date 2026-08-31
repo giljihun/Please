@@ -205,9 +205,12 @@ final class GestureDrawingController {
             handleMissingTip(.handNotFound, at: timestamp)
             return
         }
-        guard let tip = pose.penTip else {
+        guard let tip = pose.penTip(mode: gripMode) else {
+            // 관절이 아예 없는 것과 신뢰도 미달은 고칠 곳이 다르다.
+            // 손하트는 엄지도 쓰므로 "검지는 멀쩡한데 엄지가 없는" 경우가 생기는데,
+            // 검지 신뢰도만 보고 판단하면 그 프레임이 '검지약함'으로 잘못 분류된다
             handleMissingTip(
-                pose.penTipConfidence == nil ? .penTipMissing : .penTipLowConfidence,
+                pose.isPenTipJointMissing(mode: gripMode) ? .penTipMissing : .penTipLowConfidence,
                 at: timestamp
             )
             return
