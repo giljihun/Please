@@ -34,10 +34,19 @@ nonisolated final class InkStrokeLayer: CALayer {
         static let lightInkThreshold: CGFloat = 0.6
 
         /// 본선 대비 광택 선의 굵기
-        static let highlightWidthRatio: CGFloat = 0.18
-        static let highlightAlpha: CGFloat = 0.45
-        /// 광택은 빛이 오는 쪽(좌상단)으로 어긋나야 표면처럼 읽힌다
-        static let highlightOffset = CGPoint(x: -0.5, y: -1)
+        static let highlightWidthRatio: CGFloat = 0.24
+        static let highlightAlpha: CGFloat = 0.72
+        /// 광택은 빛이 오는 쪽(좌상단)으로 어긋나야 표면처럼 읽힌다.
+        /// 굵기에 비례해야 굵은 펜에서도 선 안쪽에 머문다
+        static let highlightOffsetRatio: CGFloat = 0.16
+
+        /// 광택 주변의 옅은 번짐. 젖은 잉크의 반사는 경계가 딱 떨어지지 않는다
+        static let highlightGlowOpacity: Float = 0.9
+        static let highlightGlowRadius: CGFloat = 1.5
+
+        /// 넓고 아주 옅은 2차 반사 — 유리 표면 전체가 빛을 받는 느낌
+        static let sheenWidthRatio: CGFloat = 0.55
+        static let sheenAlpha: CGFloat = 0.16
 
         static let shadowOpacity: Float = 0.3
         static let shadowRadius: CGFloat = 2
@@ -45,11 +54,15 @@ nonisolated final class InkStrokeLayer: CALayer {
     }
 
     private let ink = CAShapeLayer()
+    /// 넓고 옅은 2차 반사 — 잉크 위에 먼저 깔린다
+    private let sheen = CAShapeLayer()
+    /// 좁고 밝은 1차 반사 — 유리의 하이라이트
     private let highlight = CAShapeLayer()
 
     var path: CGPath? {
         didSet {
             ink.path = path
+            sheen.path = path
             highlight.path = path
         }
     }
@@ -93,13 +106,13 @@ nonisolated final class InkStrokeLayer: CALayer {
         // bounds를 비워 두는 이유: CAShapeLayer는 masksToBounds가 꺼져 있으면
         // 자기 크기와 무관하게 path를 그린다. 캔버스 좌표를 그대로 쓸 수 있어
         // 뷰 크기가 바뀌어도 레이아웃을 다시 계산할 필요가 없다
-        for shape in [ink, highlight] {
+        // 순서가 곧 쌓임 순서다 — 잉크 위에 넓은 반사, 그 위에 밝은 하이라이트
+        for shape in [ink, sheen, highlight] {
             shape.fillColor = nil
             shape.lineCap = .round
             shape.lineJoin = .round
             addSublayer(shape)
         }
-        highlight.position = Ink.highlightOffset
         applyStyle()
     }
 
@@ -112,9 +125,24 @@ nonisolated final class InkStrokeLayer: CALayer {
         ink.shadowRadius = Ink.shadowRadius
         ink.shadowOffset = Ink.shadowOffset
 
+        sheen.strokeColor = UIColor.white
+            .withAlphaComponent(Ink.sheenAlpha).cgColor
+        sheen.lineWidth = strokeWidth * Ink.sheenWidthRatio
+
         highlight.strokeColor = UIColor.white
             .withAlphaComponent(Ink.highlightAlpha).cgColor
         highlight.lineWidth = strokeWidth * Ink.highlightWidthRatio
+        // 젖은 잉크의 반사는 경계가 딱 떨어지지 않는다. 흰 그림자를 얹어 번지게 한다
+        highlight.shadowColor = UIColor.white.cgColor
+        highlight.shadowOpacity = Ink.highlightGlowOpacity
+        highlight.shadowRadius = Ink.highlightGlowRadius
+        highlight.shadowOffset = .zero
+
+        // 어긋남을 굵기에 비례시켜야 굵은 펜에서도 반사가 선 안쪽에 머문다.
+        // 고정값을 쓰면 12pt에서 맞춘 값이 24pt에서는 선 가운데로 와 버린다
+        let offset = strokeWidth * Ink.highlightOffsetRatio
+        sheen.position = CGPoint(x: -offset * 0.4, y: -offset * 0.4)
+        highlight.position = CGPoint(x: -offset, y: -offset * 1.4)
 
         // 어두운 잉크에만 곱하기 합성을 건다.
         //
