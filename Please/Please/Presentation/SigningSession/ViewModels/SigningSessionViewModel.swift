@@ -98,7 +98,12 @@ final class SigningSessionViewModel {
     /// 무엇을 "펜을 쥔 것"으로 볼지 (#26 개발용 비교).
     /// 세 손가락과 손하트 중 어느 쪽이 실사용에서 나은지는 계산으로 알 수 없어
     /// 실기기에서 나란히 써보고 정한다. 확정되면 하나만 남기고 이 토글은 사라진다
-    var gripMode: GripMode = .threeFinger
+    var gripMode: GripMode = .threeFinger {
+        didSet {
+            guard gripMode != oldValue else { return }
+            resetRatioRange()
+        }
+    }
 
     /// 기본값이 곧 제품 규칙이다 — 제스처가 기본, 터치는 사용자가 직접 고르는 폴백
     var inputMode: InputMode = .gesture {
@@ -153,15 +158,52 @@ final class SigningSessionViewModel {
     /// 진입·이탈 문턱은 전부 이 숫자를 재서 정한다
     private(set) var gripRatio: CGFloat?
 
+    /// 최근 관찰 구간의 최소·최대 비율.
+    ///
+    /// 현재 값만 띄우면 실제로는 읽을 수가 없다 — 손 모양을 만드는 동안 숫자는
+    /// 계속 흔들리고, 정작 그 손이 화면을 가린다. 구간의 최소·최대를 남겨 두면
+    /// **동작을 끝내고 손을 치운 뒤에** 얼마까지 내려갔는지 확인할 수 있다.
+    /// 문턱값은 이 두 숫자 사이에서 정한다
+    private(set) var gripRatioRange: ClosedRange<CGFloat>?
+
+    /// 관찰 구간 길이. 짧으면 최소값이 금방 사라지고, 길면 이전 동작의 값이 섞인다
+    private static let ratioWindow: TimeInterval = 2.5
+    private var ratioSamples: [(value: CGFloat, at: TimeInterval)] = []
+
     func handleTrackingDiagnostics(_ feedback: GestureDrawingController.Feedback) {
         lastLossLabel = feedback.lastLoss?.shortLabel
         penTipConfidence = feedback.penTipConfidence
         gripRatio = feedback.gripRatio
+        updateRatioRange(with: feedback.gripRatio)
         lossSummary = feedback.lossCounts
             .sorted { $0.value > $1.value }
             .prefix(3)
             .map { "\($0.key.shortLabel) \($0.value)" }
             .joined(separator: "  ")
+    }
+
+    /// 관찰 구간을 굴리며 최소·최대를 갱신한다.
+    /// 벽시계가 아닌 단조 시계를 쓴다 — 시간 간격을 재는 데 벽시계를 쓰면
+    /// 시각 보정이 들어오는 순간 구간이 뒤틀린다
+    private func updateRatioRange(with ratio: CGFloat?) {
+        let now = CACurrentMediaTime()
+        if let ratio { ratioSamples.append((ratio, now)) }
+        ratioSamples.removeAll { now - $0.at > Self.ratioWindow }
+
+        let values = ratioSamples.map(\.value)
+        guard let low = values.min(), let high = values.max() else {
+            gripRatioRange = nil
+            return
+        }
+        gripRatioRange = low...high
+    }
+
+    /// 판정 방식이 바뀌면 재는 대상 자체가 달라진다. 이전 방식의 값이 섞이면
+    /// 구간이 두 방식에 걸쳐 무의미해지므로 관찰을 비운다
+    private func resetRatioRange() {
+        ratioSamples.removeAll()
+        gripRatioRange = nil
+        gripRatio = nil
     }
 
     func handleHandDetection(detected: Bool, milliseconds: Double) {

@@ -154,11 +154,24 @@ nonisolated struct HandPose: Sendable {
     /// 좌우 손을 가릴 필요가 없다는 것도 장점이다. "어느 쪽으로 넘어갔는가"를
     /// 외적 부호로 판정하면 왼손·오른손과 전면 카메라 미러링까지 따져야 하는데,
     /// 거리로 재면 그 분기가 통째로 사라진다
+    /// ## 기준자가 `gripScale`과 다른 이유 (2026-08-31)
+    ///
+    /// `gripScale`은 검지 밑동에서 **끝**까지의 직선 거리다. 검지를 곧게 펴면 길고,
+    /// 구부리면 짧아진다 — **손 크기가 아니라 손 모양을 재는 값**이다.
+    ///
+    /// 손하트는 검지를 **깊게 구부린 상태**가 전제다. 그래서 분모가 크게 줄어들고
+    /// 같은 자세인데도 비율이 부풀려져, 아무리 붙여도 문턱 아래로 안 내려갔다.
+    ///
+    /// 밑동~첫마디(`indexMCP`~`indexPIP`)는 **뼈 한 마디**라 구부려도 길이가 그대로다.
+    /// 손 크기에는 비례하고 손 모양에는 흔들리지 않는, 이 판정에 맞는 기준자다
     func heartRatio(imageSize: CGSize) -> CGFloat? {
         guard let thumb = joints[.thumbTip],
+              let mcp = joints[.indexMCP],
               let pip = joints[.indexPIP],
-              let dip = joints[.indexDIP],
-              let scale = gripScale(imageSize: imageSize), scale > 0 else { return nil }
+              let dip = joints[.indexDIP] else { return nil }
+
+        let scale = Self.pixelDistance(mcp.location, pip.location, imageSize: imageSize)
+        guard scale > 0 else { return nil }
 
         return Self.pixelDistanceToSegment(
             thumb.location, from: pip.location, to: dip.location, imageSize: imageSize
@@ -243,21 +256,25 @@ enum GripMode: CaseIterable {
     /// 진입:이탈 비율 1.6배만 맞춰 이력현상의 여유를 같게 뒀다.
     ///
     /// 2026-08-31 1차 실사용에서 **두 방식 다 너무 쉽게 켜졌다**는 피드백에 따라
-    /// 진입을 조였다 (세 손가락 0.30→0.20, 손하트 0.22→0.12).
+    /// 진입을 조였다 (세 손가락 0.30→0.20).
     /// 이탈도 함께 내린 이유: 진입만 조이면 두 값의 간격이 벌어져
     /// **떼기가 어려워진다.** 그러면 "이동 중에도 획이 계속 그려지는" 문제가
     /// 되살아난다 — 0.45에서 겪었던 그 문제다 (GestureDrawingController 주석 참고)
+    ///
+    /// 손하트는 같은 조정(0.22→0.12)에서 **아예 인식이 안 됐다.** 문턱이 아니라
+    /// 기준자가 문제였다 — `heartRatio` 주석 참고. 기준자를 바꾼 뒤 다시
+    /// 넉넉하게 열어 두고 실제 값을 재기로 한다
     var enterRatio: CGFloat {
         switch self {
         case .threeFinger: 0.20
-        case .heart: 0.12
+        case .heart: 0.45
         }
     }
 
     var exitRatio: CGFloat {
         switch self {
         case .threeFinger: 0.32
-        case .heart: 0.20
+        case .heart: 0.72
         }
     }
 

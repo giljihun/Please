@@ -118,6 +118,12 @@ private struct TrackingLossView: View {
                     Text("—")
                         .foregroundStyle(.red.opacity(0.9))
                 }
+                // 손이 화면을 가려 현재 값은 동작 중에 못 읽는다.
+                // 최근 구간의 최소~최대를 남겨 손을 치운 뒤 확인하게 한다
+                if let range = viewModel.gripRatioRange {
+                    Text("↕\(range.lowerBound, specifier: "%.2f")~\(range.upperBound, specifier: "%.2f")")
+                        .foregroundStyle(.yellow)
+                }
                 Text("(\(viewModel.gripMode.enterRatio, specifier: "%.2f")/\(viewModel.gripMode.exitRatio, specifier: "%.2f"))")
                     .foregroundStyle(.white.opacity(0.45))
             }
